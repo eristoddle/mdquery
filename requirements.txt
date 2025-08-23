@@ -1,0 +1,30 @@
+# Core dependencies for mdquery
+# SQLite3 is included with Python standard library
+
+# Frontmatter parsing
+python-frontmatter>=1.0.0
+
+# Command-line interface
+click>=8.0.0
+
+# Markdown parsing
+markdown>=3.4.0
+
+# Additional markdown extensions for better parsing
+markdown-extensions>=0.1.0
+
+# Type checking support (development)
+typing-extensions>=4.0.0
+
+# MCP server dependencies (will be added in task 11)
+# mcp>=0.1.0
+
+# Testing dependencies (development)
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
+
+# Code quality (development)
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.0.0
