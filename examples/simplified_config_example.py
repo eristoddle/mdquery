@@ -230,6 +230,108 @@ def demonstrate_mcp_server_integration(config: SimplifiedConfig):
         return None
 
 
+async def demonstrate_auto_indexing_and_retry():
+    """Demonstrate automatic indexing and retry logic."""
+    print("\n" + "="*60)
+    print("AUTO-INDEXING AND RETRY LOGIC EXAMPLE")
+    print("="*60)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        # Create example vault with more content
+        vault_dir = create_example_vault(temp_path)
+
+        # Add more files to demonstrate indexing
+        research_dir = vault_dir / "Research"
+        research_dir.mkdir(exist_ok=True)
+
+        (research_dir / "AI Agents.md").write_text("""---
+tags: [ai, agents, research, llm]
+category: research
+---
+
+# AI Agents Research
+
+## Key Concepts
+- Autonomous decision making
+- Tool usage and integration
+- Multi-step reasoning
+
+## Applications
+- Code generation and review
+- Data analysis and reporting
+- Workflow automation
+
+## Related Topics
+- [[MCP Integration]]
+- [[Workflow Optimization]]
+""")
+
+        (research_dir / "MCP Integration.md").write_text("""---
+tags: [mcp, integration, protocol, ai-tools]
+category: technical
+---
+
+# Model Context Protocol Integration
+
+## Overview
+MCP enables AI assistants to access external tools and data sources.
+
+## Benefits
+- Standardized tool interfaces
+- Secure data access
+- Extensible architecture
+
+## Implementation
+- Server-side tool definitions
+- Client-side protocol handling
+- Bidirectional communication
+""")
+
+        try:
+            print(f"\n📁 Creating configuration with auto-indexing enabled...")
+            config = SimplifiedConfig(notes_dir=vault_dir, auto_index=True)
+            server = MDQueryMCPServer(config=config)
+
+            print(f"🔄 Triggering server initialization (with auto-indexing)...")
+
+            # Import asyncio for the async call
+            import asyncio
+
+            # Trigger initialization which will perform auto-indexing
+            await server._ensure_initialized()
+
+            print(f"✅ Server initialization completed!")
+            print(f"   Initialization successful: {server._initialization_successful}")
+            print(f"   Components initialized: {server.db_manager is not None}")
+
+            # Check what was indexed
+            if server.query_engine:
+                try:
+                    schema = server.query_engine.get_schema()
+                    if "files" in schema.get("tables", {}):
+                        result = server.query_engine.execute_query("SELECT COUNT(*) as count FROM files")
+                        file_count = result.rows[0]['count']
+                        print(f"   Files indexed: {file_count}")
+
+                        # Show some indexed files
+                        if file_count > 0:
+                            result = server.query_engine.execute_query(
+                                "SELECT file_path, title FROM files LIMIT 3"
+                            )
+                            print(f"   Sample indexed files:")
+                            for row in result.rows:
+                                print(f"      • {row['title']} ({Path(row['file_path']).name})")
+                except Exception as e:
+                    print(f"   Could not query indexed files: {e}")
+
+        except Exception as e:
+            print(f"❌ Auto-indexing demonstration failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+
 def demonstrate_configuration_persistence():
     """Demonstrate saving and loading configuration."""
     print("\n" + "="*60)
@@ -308,7 +410,7 @@ def demonstrate_error_handling():
             print(f"Expected error caught:\n{error_message}")
 
 
-def main():
+async def main():
     """Run all configuration examples."""
     print("🎯 mdquery Simplified Configuration Examples")
     print("=" * 60)
@@ -322,6 +424,9 @@ def main():
     if config1:
         demonstrate_mcp_server_integration(config1)
 
+    # Demonstrate new auto-indexing and retry functionality
+    await demonstrate_auto_indexing_and_retry()
+
     demonstrate_configuration_persistence()
     demonstrate_error_handling()
 
@@ -332,10 +437,13 @@ def main():
     print("• Only requires notes directory path")
     print("• Automatic .mdquery directory creation")
     print("• Intelligent note system detection (Obsidian, Joplin, etc.)")
-    print("• Comprehensive error handling with helpful messages")
+    print("• Automatic initial indexing on server startup")
+    print("• Graceful error handling with retry logic")
+    print("• Comprehensive error messages with helpful guidance")
     print("• Configuration persistence and loading")
     print("• Backward compatibility with legacy configuration")
 
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())

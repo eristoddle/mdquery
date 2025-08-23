@@ -84,6 +84,11 @@ class MDQueryMCPServer:
         # Thread safety lock
         self._lock = threading.RLock()
 
+        # Initialization state tracking
+        self._initialization_attempted = False
+        self._initialization_successful = False
+        self._initialization_error: Optional[Exception] = None
+
         # Initialize MCP server
         self.server = FastMCP("mdquery")
         self._setup_tools()
@@ -906,59 +911,177 @@ class MDQueryMCPServer:
                 raise MCPServerError(f"File content retrieval failed: {e}")
 
     async def _ensure_initialized(self) -> None:
-        """Ensure all components are initialized."""
+        """
+        Ensure all components are initialized with retry logic.
+
+        Implements requirements 1.5, 4.2, 4.3 for automatic initialization,
+        graceful error handling, and retry logic.
+        """
         if self.db_manager is None:
             with self._lock:
                 if self.db_manager is None:
+                    # Check if initialization was already attempted and failed
+                    if self._initialization_attempted and not self._initialization_successful:
+                        if self._initialization_error:
+                            # Re-raise the previous initialization error with helpful context
+                            error_message = create_helpful_error_message(
+                                self._initialization_error,
+                                str(self.notes_dirs[0]) if self.notes_dirs else None
+                            )
+                            raise MCPServerError(f"Previous initialization failed: {error_message}")
+                        else:
+                            raise MCPServerError("Previous initialization failed with unknown error")
+
                     # Initialize in thread pool to avoid blocking
                     loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(self.executor, self._initialize_components)
+                    await loop.run_in_executor(self.executor, self._initialize_components_with_retry)
 
-    def _initialize_components(self) -> None:
-        """Initialize database and related components."""
+    def _initialize_components_with_retry(self) -> None:
+        """
+        Initialize database and related components with retry logic.
+
+        Implements requirements 1.5, 4.2, 4.3 for automatic initialization,
+        graceful error handling, and retry logic.
+        """
+        self._initialization_attempted = True
+        max_retries = 3
+        retry_delay = 1.0  # seconds
+
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Initializing MCP server components (attempt {attempt + 1}/{max_retries})")
+
+                # Initialize core components
+                self._initialize_core_components()
+
+                # Perform auto-indexing if enabled
+                if self.auto_index:
+                    self._perform_auto_indexing()
+                else:
+                    logger.info("Auto-indexing disabled")
+
+                # Mark initialization as successful
+                self._initialization_successful = True
+                logger.info("MCP server components initialized successfully")
+                return
+
+            except Exception as e:
+                self._initialization_error = e
+                logger.error(f"Initialization attempt {attempt + 1} failed: {e}")
+
+                if attempt < max_retries - 1:
+                    logger.info(f"Retrying initialization in {retry_delay} seconds...")
+                    import time
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    logger.error("All initialization attempts failed")
+                    # Create helpful error message
+                    error_message = create_helpful_error_message(
+                        e,
+                        str(self.notes_dirs[0]) if self.notes_dirs else None
+                    )
+                    raise MCPServerError(f"Initialization failed after {max_retries} attempts: {error_message}")
+
+    def _initialize_core_components(self) -> None:
+        """Initialize core database and query components."""
         try:
             # Initialize database
+            logger.debug(f"Initializing database at: {self.db_path}")
             self.db_manager = create_database(self.db_path)
 
             # Initialize cache manager
+            logger.debug(f"Initializing cache manager with cache dir: {self.cache_dir}")
             self.cache_manager = CacheManager(
-                cache_path=self.db_path,  # Use same path as database
+                cache_path=self.cache_dir,  # Use cache directory, not database path
                 database_manager=self.db_manager
             )
 
             # Initialize query engine
+            logger.debug("Initializing query engine")
             self.query_engine = QueryEngine(self.db_manager)
 
             # Initialize indexer
+            logger.debug("Initializing indexer")
             self.indexer = Indexer(
                 database_manager=self.db_manager,
                 cache_manager=self.cache_manager
             )
 
-            # Auto-index notes directories if enabled and specified
-            if self.auto_index and self.notes_dirs:
-                for notes_dir in self.notes_dirs:
-                    if notes_dir.exists():
-                        logger.info(f"Auto-indexing notes directory: {notes_dir}")
-                        try:
-                            # Use incremental indexing for better performance
-                            stats = self.indexer.incremental_index_directory(notes_dir, recursive=True)
-                            logger.info(f"Auto-indexing completed for {notes_dir}: {stats}")
-                        except Exception as e:
-                            logger.warning(f"Auto-indexing failed for {notes_dir}: {e}")
-                            # Continue with other directories even if one fails
-                    else:
-                        logger.warning(f"Notes directory does not exist: {notes_dir}")
-            elif self.auto_index:
-                logger.info("Auto-indexing enabled but no notes directories specified")
-            else:
-                logger.info("Auto-indexing disabled")
-
-            logger.info("MCP server components initialized successfully")
+            logger.info("Core components initialized successfully")
 
         except Exception as e:
-            logger.error(f"Failed to initialize components: {e}")
-            raise MCPServerError(f"Initialization failed: {e}")
+            logger.error(f"Failed to initialize core components: {e}")
+            # Clean up partially initialized components
+            self._cleanup_partial_initialization()
+            raise
+
+    def _perform_auto_indexing(self) -> None:
+        """
+        Perform automatic indexing of notes directories with error recovery.
+
+        Implements requirement 1.5 for automatic initial indexing.
+        """
+        if not self.notes_dirs:
+            logger.info("Auto-indexing enabled but no notes directories specified")
+            return
+
+        successful_indexes = 0
+        total_directories = len(self.notes_dirs)
+
+        for notes_dir in self.notes_dirs:
+            try:
+                if not notes_dir.exists():
+                    logger.warning(f"Notes directory does not exist: {notes_dir}")
+                    continue
+
+                logger.info(f"Auto-indexing notes directory: {notes_dir}")
+
+                # Try incremental indexing first for better performance
+                try:
+                    stats = self.indexer.incremental_index_directory(notes_dir, recursive=True)
+                    logger.info(f"Incremental indexing completed for {notes_dir}: {stats}")
+                    successful_indexes += 1
+
+                except Exception as incremental_error:
+                    logger.warning(f"Incremental indexing failed for {notes_dir}: {incremental_error}")
+                    logger.info(f"Falling back to full indexing for {notes_dir}")
+
+                    # Fallback to full indexing
+                    try:
+                        stats = self.indexer.index_directory(notes_dir, recursive=True)
+                        logger.info(f"Full indexing completed for {notes_dir}: {stats}")
+                        successful_indexes += 1
+
+                    except Exception as full_error:
+                        logger.error(f"Both incremental and full indexing failed for {notes_dir}: {full_error}")
+                        # Continue with other directories
+
+            except Exception as e:
+                logger.error(f"Unexpected error during auto-indexing of {notes_dir}: {e}")
+                # Continue with other directories
+
+        # Log summary
+        if successful_indexes == 0:
+            logger.warning("Auto-indexing completed but no directories were successfully indexed")
+        elif successful_indexes < total_directories:
+            logger.warning(f"Auto-indexing partially completed: {successful_indexes}/{total_directories} directories indexed")
+        else:
+            logger.info(f"Auto-indexing completed successfully: {successful_indexes}/{total_directories} directories indexed")
+
+    def _cleanup_partial_initialization(self) -> None:
+        """Clean up partially initialized components."""
+        try:
+            if self.indexer:
+                self.indexer = None
+            if self.query_engine:
+                self.query_engine = None
+            if self.cache_manager:
+                self.cache_manager = None
+            if self.db_manager:
+                self.db_manager = None
+        except Exception as e:
+            logger.warning(f"Error during cleanup: {e}")
 
     async def run(self) -> None:
         """Run the MCP server."""

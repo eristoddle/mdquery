@@ -6,7 +6,7 @@
   - Create configuration validation and error handling with helpful messages
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 4.1, 4.5_
 
-- [ ] 2. Enhance MCP server initialization with auto-indexing
+- [x] 2. Enhance MCP server initialization with auto-indexing
   - Modify MDQueryMCPServer constructor to use SimplifiedConfig
   - Implement automatic initial indexing on server startup
   - Add graceful error handling for initialization failures with retry logic
