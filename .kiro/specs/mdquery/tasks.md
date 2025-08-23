@@ -6,7 +6,7 @@
   - Set up project dependencies in requirements.txt (sqlite3, python-frontmatter, click, markdown)
   - _Requirements: 2.1, 2.2_
 
-- [ ] 2. Implement SQLite database schema and initialization
+- [x] 2. Implement SQLite database schema and initialization
   - Create database schema with files, frontmatter, tags, links, and FTS5 tables
   - Implement database connection management and initialization functions
   - Create database migration system for schema updates
