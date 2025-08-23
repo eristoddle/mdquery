@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from concurrent.futures import ThreadPoolExecutor
 import threading
+from datetime import datetime
 
 from mcp.server.fastmcp import FastMCP
 
@@ -20,6 +21,7 @@ from .database import DatabaseManager, create_database
 from .indexer import Indexer
 from .query import QueryEngine
 from .cache import CacheManager
+from .research import ResearchEngine, ResearchFilter
 
 logger = logging.getLogger(__name__)
 
@@ -436,6 +438,271 @@ class MDQueryMCPServer:
             except Exception as e:
                 logger.error(f"Aggregation query execution failed: {e}")
                 raise MCPServerError(f"Aggregation query execution failed: {e}")
+
+        @self.server.tool()
+        async def fuzzy_search(search_text: str, threshold: float = 0.6, max_results: int = 50,
+                              search_fields: str = "content,title,headings") -> str:
+            """
+            Perform fuzzy text matching for related content discovery.
+
+            Args:
+                search_text: Text to search for similar content
+                threshold: Minimum similarity score (0.0 to 1.0)
+                max_results: Maximum number of results to return
+                search_fields: Fields to search in (comma-separated)
+
+            Returns:
+                Fuzzy search results as JSON
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Parse search fields
+                fields_list = [field.strip() for field in search_fields.split(',')]
+
+                # Perform fuzzy search in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_fuzzy_search():
+                    research_engine = ResearchEngine(self.query_engine)
+                    return research_engine.fuzzy_search(search_text, threshold, max_results, fields_list)
+
+                matches = await loop.run_in_executor(self.executor, run_fuzzy_search)
+
+                # Convert to JSON-serializable format
+                json_data = []
+                for match in matches:
+                    json_data.append({
+                        'file_path': match.file_path,
+                        'matched_text': match.matched_text,
+                        'similarity_score': match.similarity_score,
+                        'context_before': match.context_before,
+                        'context_after': match.context_after,
+                        'match_type': match.match_type,
+                        'line_number': match.line_number
+                    })
+
+                return json.dumps(json_data, indent=2)
+
+            except Exception as e:
+                logger.error(f"Fuzzy search failed: {e}")
+                raise MCPServerError(f"Fuzzy search failed: {e}")
+
+        @self.server.tool()
+        async def cross_collection_search(query_text: str, collections: str, max_per_collection: int = 20) -> str:
+            """
+            Perform cross-collection querying for multiple note sources.
+
+            Args:
+                query_text: Text to search for across collections
+                collections: Comma-separated list of collection identifiers
+                max_per_collection: Maximum results per collection
+
+            Returns:
+                Cross-collection search results as JSON
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Parse collections
+                collections_list = [c.strip() for c in collections.split(',')]
+
+                # Perform cross-collection search in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_cross_search():
+                    research_engine = ResearchEngine(self.query_engine)
+                    return research_engine.cross_collection_search(query_text, collections_list, max_per_collection)
+
+                results = await loop.run_in_executor(self.executor, run_cross_search)
+
+                # Convert to JSON-serializable format
+                json_data = []
+                for result in results:
+                    json_data.append({
+                        'collection_name': result.collection_name,
+                        'file_path': result.file_path,
+                        'relevance_score': result.relevance_score,
+                        'matched_fields': result.matched_fields,
+                        'metadata': result.metadata
+                    })
+
+                return json.dumps(json_data, indent=2, default=str)
+
+            except Exception as e:
+                logger.error(f"Cross-collection search failed: {e}")
+                raise MCPServerError(f"Cross-collection search failed: {e}")
+
+        @self.server.tool()
+        async def extract_quotes_with_attribution(files: Optional[str] = None, patterns: Optional[str] = None) -> str:
+            """
+            Extract quotes and references with source attribution preservation.
+
+            Args:
+                files: Comma-separated list of specific files to process (optional)
+                patterns: Custom regex patterns for quote detection (comma-separated, optional)
+
+            Returns:
+                Source attributions with quote and citation information as JSON
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Parse file list if provided
+                file_paths = None
+                if files:
+                    file_paths = [f.strip() for f in files.split(',')]
+
+                # Parse custom patterns if provided
+                quote_patterns = None
+                if patterns:
+                    quote_patterns = [p.strip() for p in patterns.split(',')]
+
+                # Extract quotes in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_quote_extraction():
+                    research_engine = ResearchEngine(self.query_engine)
+                    return research_engine.extract_quotes_with_attribution(file_paths, quote_patterns)
+
+                attributions = await loop.run_in_executor(self.executor, run_quote_extraction)
+
+                # Convert to JSON-serializable format
+                json_data = []
+                for attr in attributions:
+                    json_data.append({
+                        'source_file': attr.source_file,
+                        'quote_text': attr.quote_text,
+                        'context': attr.context,
+                        'author': attr.author,
+                        'title': attr.title,
+                        'date': attr.date,
+                        'page_number': attr.page_number,
+                        'url': attr.url,
+                        'citation_format': attr.citation_format
+                    })
+
+                return json.dumps(json_data, indent=2)
+
+            except Exception as e:
+                logger.error(f"Quote extraction failed: {e}")
+                raise MCPServerError(f"Quote extraction failed: {e}")
+
+        @self.server.tool()
+        async def filter_by_research_criteria(date_from: Optional[str] = None, date_to: Optional[str] = None,
+                                            topics: Optional[str] = None, sources: Optional[str] = None,
+                                            authors: Optional[str] = None, collections: Optional[str] = None,
+                                            format: str = "json") -> str:
+            """
+            Filter content by research criteria including date ranges and topics.
+
+            Args:
+                date_from: Filter from date (YYYY-MM-DD format, optional)
+                date_to: Filter to date (YYYY-MM-DD format, optional)
+                topics: Filter by topics/tags (comma-separated, optional)
+                sources: Filter by source paths (comma-separated, optional)
+                authors: Filter by authors (comma-separated, optional)
+                collections: Filter by collections/directories (comma-separated, optional)
+                format: Output format (json, csv, table, markdown)
+
+            Returns:
+                Filtered research content as JSON or specified format
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Parse date parameters
+                date_from_obj = None
+                date_to_obj = None
+                if date_from:
+                    date_from_obj = datetime.strptime(date_from, '%Y-%m-%d')
+                if date_to:
+                    date_to_obj = datetime.strptime(date_to, '%Y-%m-%d')
+
+                # Build research filter
+                research_filter = ResearchFilter(
+                    date_from=date_from_obj,
+                    date_to=date_to_obj,
+                    topics=[t.strip() for t in topics.split(',')] if topics else None,
+                    sources=[s.strip() for s in sources.split(',')] if sources else None,
+                    authors=[a.strip() for a in authors.split(',')] if authors else None,
+                    collections=[c.strip() for c in collections.split(',')] if collections else None
+                )
+
+                # Apply filter in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_research_filter():
+                    research_engine = ResearchEngine(self.query_engine)
+                    return research_engine.filter_by_research_criteria(research_filter)
+
+                result = await loop.run_in_executor(self.executor, run_research_filter)
+
+                # Format results
+                if format == "json":
+                    return json.dumps(result.to_dict(), indent=2, default=str)
+                else:
+                    return self.query_engine.format_results(result, format)
+
+            except Exception as e:
+                logger.error(f"Research filtering failed: {e}")
+                raise MCPServerError(f"Research filtering failed: {e}")
+
+        @self.server.tool()
+        async def generate_research_summary(date_from: Optional[str] = None, date_to: Optional[str] = None,
+                                          topics: Optional[str] = None, sources: Optional[str] = None,
+                                          authors: Optional[str] = None, collections: Optional[str] = None) -> str:
+            """
+            Generate comprehensive research summary and statistics.
+
+            Args:
+                date_from: Filter from date (YYYY-MM-DD format, optional)
+                date_to: Filter to date (YYYY-MM-DD format, optional)
+                topics: Filter by topics/tags (comma-separated, optional)
+                sources: Filter by source paths (comma-separated, optional)
+                authors: Filter by authors (comma-separated, optional)
+                collections: Filter by collections/directories (comma-separated, optional)
+
+            Returns:
+                Research summary statistics as JSON
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Parse date parameters
+                date_from_obj = None
+                date_to_obj = None
+                if date_from:
+                    date_from_obj = datetime.strptime(date_from, '%Y-%m-%d')
+                if date_to:
+                    date_to_obj = datetime.strptime(date_to, '%Y-%m-%d')
+
+                # Build research filter if any criteria provided
+                research_filter = None
+                if any([date_from, date_to, topics, sources, authors, collections]):
+                    research_filter = ResearchFilter(
+                        date_from=date_from_obj,
+                        date_to=date_to_obj,
+                        topics=[t.strip() for t in topics.split(',')] if topics else None,
+                        sources=[s.strip() for s in sources.split(',')] if sources else None,
+                        authors=[a.strip() for a in authors.split(',')] if authors else None,
+                        collections=[c.strip() for c in collections.split(',')] if collections else None
+                    )
+
+                # Generate research summary in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_research_summary():
+                    research_engine = ResearchEngine(self.query_engine)
+                    return research_engine.generate_research_summary(research_filter)
+
+                summary = await loop.run_in_executor(self.executor, run_research_summary)
+
+                return json.dumps(summary, indent=2, default=str)
+
+            except Exception as e:
+                logger.error(f"Research summary generation failed: {e}")
+                raise MCPServerError(f"Research summary generation failed: {e}")
 
         @self.server.tool()
         async def get_file_content(file_path: str, include_parsed: bool = False) -> str:
