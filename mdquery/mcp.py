@@ -204,6 +204,240 @@ class MDQueryMCPServer:
                 raise MCPServerError(f"Directory indexing failed: {e}")
 
         @self.server.tool()
+        async def analyze_seo(files: Optional[str] = None) -> str:
+            """
+            Perform SEO analysis on markdown files.
+
+            Args:
+                files: Comma-separated list of specific files to analyze (optional)
+
+            Returns:
+                SEO analysis results as JSON
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Parse file list if provided
+                file_paths = None
+                if files:
+                    file_paths = [f.strip() for f in files.split(',')]
+
+                # Perform SEO analysis in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_seo_analysis():
+                    advanced_engine = self.query_engine.get_advanced_engine()
+                    return advanced_engine.analyze_seo(file_paths)
+
+                analyses = await loop.run_in_executor(self.executor, run_seo_analysis)
+
+                # Convert to JSON-serializable format
+                json_data = []
+                for analysis in analyses:
+                    json_data.append({
+                        'file_path': analysis.file_path,
+                        'title': analysis.title,
+                        'description': analysis.description,
+                        'category': analysis.category,
+                        'word_count': analysis.word_count,
+                        'heading_count': analysis.heading_count,
+                        'tags': analysis.tags,
+                        'issues': analysis.issues,
+                        'score': analysis.score
+                    })
+
+                return json.dumps(json_data, indent=2)
+
+            except Exception as e:
+                logger.error(f"SEO analysis failed: {e}")
+                raise MCPServerError(f"SEO analysis failed: {e}")
+
+        @self.server.tool()
+        async def analyze_content_structure(files: Optional[str] = None) -> str:
+            """
+            Analyze content structure and hierarchy.
+
+            Args:
+                files: Comma-separated list of specific files to analyze (optional)
+
+            Returns:
+                Content structure analysis results as JSON
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Parse file list if provided
+                file_paths = None
+                if files:
+                    file_paths = [f.strip() for f in files.split(',')]
+
+                # Perform structure analysis in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_structure_analysis():
+                    advanced_engine = self.query_engine.get_advanced_engine()
+                    return advanced_engine.analyze_content_structure(file_paths)
+
+                analyses = await loop.run_in_executor(self.executor, run_structure_analysis)
+
+                # Convert to JSON-serializable format
+                json_data = []
+                for analysis in analyses:
+                    json_data.append({
+                        'file_path': analysis.file_path,
+                        'heading_hierarchy': analysis.heading_hierarchy,
+                        'word_count': analysis.word_count,
+                        'paragraph_count': analysis.paragraph_count,
+                        'readability_score': analysis.readability_score,
+                        'structure_issues': analysis.structure_issues
+                    })
+
+                return json.dumps(json_data, indent=2)
+
+            except Exception as e:
+                logger.error(f"Structure analysis failed: {e}")
+                raise MCPServerError(f"Structure analysis failed: {e}")
+
+        @self.server.tool()
+        async def find_similar_content(file_path: str, threshold: float = 0.3) -> str:
+            """
+            Find content similar to the specified file.
+
+            Args:
+                file_path: Path of the file to find similar content for
+                threshold: Minimum similarity score (0.0 to 1.0)
+
+            Returns:
+                Similar content results as JSON
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Find similar content in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_similarity_analysis():
+                    advanced_engine = self.query_engine.get_advanced_engine()
+                    return advanced_engine.find_similar_content(file_path, threshold)
+
+                similarities = await loop.run_in_executor(self.executor, run_similarity_analysis)
+
+                # Convert to JSON-serializable format
+                json_data = []
+                for sim in similarities:
+                    json_data.append({
+                        'file1_path': sim.file1_path,
+                        'file2_path': sim.file2_path,
+                        'common_tags': sim.common_tags,
+                        'similarity_score': sim.similarity_score,
+                        'total_tags_file1': sim.total_tags_file1,
+                        'total_tags_file2': sim.total_tags_file2
+                    })
+
+                return json.dumps(json_data, indent=2)
+
+            except Exception as e:
+                logger.error(f"Similarity analysis failed: {e}")
+                raise MCPServerError(f"Similarity analysis failed: {e}")
+
+        @self.server.tool()
+        async def analyze_link_relationships() -> str:
+            """
+            Analyze link relationships between files.
+
+            Returns:
+                Link relationship analysis results as JSON
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Analyze link relationships in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_link_analysis():
+                    advanced_engine = self.query_engine.get_advanced_engine()
+                    return advanced_engine.analyze_link_relationships()
+
+                analyses = await loop.run_in_executor(self.executor, run_link_analysis)
+
+                # Convert to JSON-serializable format
+                json_data = []
+                for analysis in analyses:
+                    json_data.append({
+                        'source_file': analysis.source_file,
+                        'target_file': analysis.target_file,
+                        'link_type': analysis.link_type,
+                        'is_bidirectional': analysis.is_bidirectional,
+                        'link_strength': analysis.link_strength
+                    })
+
+                return json.dumps(json_data, indent=2)
+
+            except Exception as e:
+                logger.error(f"Link analysis failed: {e}")
+                raise MCPServerError(f"Link analysis failed: {e}")
+
+        @self.server.tool()
+        async def generate_content_report() -> str:
+            """
+            Generate comprehensive content analysis report.
+
+            Returns:
+                Comprehensive report data as JSON
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Generate report in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_report_generation():
+                    advanced_engine = self.query_engine.get_advanced_engine()
+                    return advanced_engine.generate_content_report()
+
+                report_data = await loop.run_in_executor(self.executor, run_report_generation)
+
+                return json.dumps(report_data, indent=2, default=str)
+
+            except Exception as e:
+                logger.error(f"Report generation failed: {e}")
+                raise MCPServerError(f"Report generation failed: {e}")
+
+        @self.server.tool()
+        async def execute_aggregation_query(aggregation_name: str, format: str = "json") -> str:
+            """
+            Execute predefined aggregation queries for reporting.
+
+            Args:
+                aggregation_name: Name of the aggregation query to execute
+                format: Output format (json, csv, table, markdown)
+
+            Returns:
+                Aggregation query results in specified format
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Execute aggregation query in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_aggregation():
+                    advanced_engine = self.query_engine.get_advanced_engine()
+                    return advanced_engine.execute_aggregation_query(aggregation_name)
+
+                result = await loop.run_in_executor(self.executor, run_aggregation)
+
+                # Format results
+                if format == "json":
+                    return json.dumps(result.to_dict(), indent=2, default=str)
+                else:
+                    return self.query_engine.format_results(result, format)
+
+            except Exception as e:
+                logger.error(f"Aggregation query execution failed: {e}")
+                raise MCPServerError(f"Aggregation query execution failed: {e}")
+
+        @self.server.tool()
         async def get_file_content(file_path: str, include_parsed: bool = False) -> str:
             """
             Retrieve content and metadata of a specific file.

@@ -169,9 +169,9 @@ class QueryEngine:
             if re.search(pattern, normalized_sql, re.IGNORECASE):
                 raise QueryValidationError(f"Query contains dangerous pattern: {pattern}")
 
-        # Must start with SELECT
-        if not normalized_sql.startswith('SELECT'):
-            raise QueryValidationError("Only SELECT queries are allowed")
+        # Must start with SELECT or WITH (for CTEs)
+        if not (normalized_sql.startswith('SELECT') or normalized_sql.startswith('WITH')):
+            raise QueryValidationError("Only SELECT queries (including WITH clauses) are allowed")
 
         # Check for multiple statements
         if ';' in sql.rstrip(';'):
@@ -184,7 +184,15 @@ class QueryEngine:
         try:
             with self.db_manager.get_connection() as conn:
                 # Use EXPLAIN to validate syntax without executing
-                conn.execute(f"EXPLAIN {sql}")
+                # Replace parameter placeholders with dummy values for validation
+                validation_sql = sql
+                param_count = sql.count('?')
+                if param_count > 0:
+                    dummy_params = ['dummy'] * param_count
+                    validation_sql = sql
+                    for _ in range(param_count):
+                        validation_sql = validation_sql.replace('?', "'dummy'", 1)
+                conn.execute(f"EXPLAIN {validation_sql}")
         except sqlite3.Error as e:
             raise QueryValidationError(f"Invalid SQL syntax: {e}") from e
 
@@ -200,6 +208,12 @@ class QueryEngine:
         Raises:
             QueryValidationError: If invalid table references are found
         """
+        # Extract CTE names from WITH clauses
+        cte_names = set()
+        with_pattern = r'\bWITH\s+(\w+)\s+AS'
+        for match in re.finditer(with_pattern, sql, re.IGNORECASE):
+            cte_names.add(match.group(1).lower())
+
         # Extract table names from FROM and JOIN clauses
         # This is a simplified approach - a full SQL parser would be more robust
         from_pattern = r'\bFROM\s+(\w+)'
@@ -213,8 +227,11 @@ class QueryEngine:
         for match in re.finditer(join_pattern, sql, re.IGNORECASE):
             tables_found.add(match.group(1).lower())
 
+        # Combine allowed tables with CTEs
+        allowed_tables = self.AVAILABLE_TABLES.union(cte_names)
+
         # Check if all referenced tables are allowed
-        invalid_tables = tables_found - self.AVAILABLE_TABLES
+        invalid_tables = tables_found - allowed_tables
         if invalid_tables:
             raise QueryValidationError(f"Invalid table references: {', '.join(invalid_tables)}")
 
@@ -455,3 +472,13 @@ class QueryEngine:
             return "LOW - Using indexes"
         else:
             return "MEDIUM - Mixed operations"
+
+    def get_advanced_engine(self):
+        """
+        Get advanced query engine for content analysis.
+
+        Returns:
+            AdvancedQueryEngine: Advanced query engine instance
+        """
+        from .advanced_queries import AdvancedQueryEngine
+        return AdvancedQueryEngine(self)

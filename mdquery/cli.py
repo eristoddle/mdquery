@@ -401,5 +401,464 @@ def remove(file_path: str, directory: str):
         sys.exit(1)
 
 
+@cli.command()
+@click.option('--directory', '-d', default='.',
+              help='Directory containing the index')
+@click.option('--format', '-f', default='table',
+              type=click.Choice(['json', 'table'], case_sensitive=False),
+              help='Output format')
+@click.option('--files', help='Comma-separated list of specific files to analyze')
+def seo(directory: str, format: str, files: Optional[str]):
+    """Analyze SEO aspects of markdown files.
+
+    Performs SEO analysis including title, description, category validation,
+    content length analysis, and identifies common SEO issues.
+
+    Examples:
+      mdquery seo
+      mdquery seo --files "blog/post1.md,blog/post2.md"
+      mdquery seo --format json
+    """
+    try:
+        # Resolve directory path
+        dir_path = Path(directory).resolve()
+        if not dir_path.exists():
+            raise CLIError(f"Directory does not exist: {directory}")
+
+        # Get database path
+        db_path = get_database_path(str(dir_path))
+        if not db_path.exists():
+            raise CLIError(f"No index found for directory {directory}. Run 'mdquery index {directory}' first.")
+
+        # Initialize query engine and get advanced engine
+        db_manager = DatabaseManager(db_path)
+        query_engine = QueryEngine(db_manager)
+        advanced_engine = query_engine.get_advanced_engine()
+
+        # Parse file list if provided
+        file_paths = None
+        if files:
+            file_paths = [f.strip() for f in files.split(',')]
+
+        # Perform SEO analysis
+        analyses = advanced_engine.analyze_seo(file_paths)
+
+        if format.lower() == 'json':
+            # Convert to JSON-serializable format
+            json_data = []
+            for analysis in analyses:
+                json_data.append({
+                    'file_path': analysis.file_path,
+                    'title': analysis.title,
+                    'description': analysis.description,
+                    'category': analysis.category,
+                    'word_count': analysis.word_count,
+                    'heading_count': analysis.heading_count,
+                    'tags': analysis.tags,
+                    'issues': analysis.issues,
+                    'score': analysis.score
+                })
+            click.echo(json.dumps(json_data, indent=2))
+        else:
+            # Format as table
+            click.echo("SEO Analysis Results")
+            click.echo("=" * 80)
+
+            for analysis in analyses:
+                click.echo(f"\nFile: {analysis.file_path}")
+                click.echo(f"Score: {analysis.score:.1f}/100")
+                click.echo(f"Title: {analysis.title or 'MISSING'}")
+                click.echo(f"Description: {analysis.description or 'MISSING'}")
+                click.echo(f"Category: {analysis.category or 'MISSING'}")
+                click.echo(f"Word Count: {analysis.word_count}")
+                click.echo(f"Headings: {analysis.heading_count}")
+                click.echo(f"Tags: {', '.join(analysis.tags) if analysis.tags else 'NONE'}")
+
+                if analysis.issues:
+                    click.echo("Issues:")
+                    for issue in analysis.issues:
+                        click.echo(f"  - {issue}")
+
+    except CLIError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        handle_error(e, "performing SEO analysis")
+        sys.exit(1)
+
+
+@cli.command()
+@click.option('--directory', '-d', default='.',
+              help='Directory containing the index')
+@click.option('--format', '-f', default='table',
+              type=click.Choice(['json', 'table'], case_sensitive=False),
+              help='Output format')
+@click.option('--files', help='Comma-separated list of specific files to analyze')
+def structure(directory: str, format: str, files: Optional[str]):
+    """Analyze content structure and hierarchy.
+
+    Examines heading hierarchy, content organization, readability,
+    and identifies structural issues in markdown files.
+
+    Examples:
+      mdquery structure
+      mdquery structure --files "docs/guide.md"
+      mdquery structure --format json
+    """
+    try:
+        # Resolve directory path
+        dir_path = Path(directory).resolve()
+        if not dir_path.exists():
+            raise CLIError(f"Directory does not exist: {directory}")
+
+        # Get database path
+        db_path = get_database_path(str(dir_path))
+        if not db_path.exists():
+            raise CLIError(f"No index found for directory {directory}. Run 'mdquery index {directory}' first.")
+
+        # Initialize query engine and get advanced engine
+        db_manager = DatabaseManager(db_path)
+        query_engine = QueryEngine(db_manager)
+        advanced_engine = query_engine.get_advanced_engine()
+
+        # Parse file list if provided
+        file_paths = None
+        if files:
+            file_paths = [f.strip() for f in files.split(',')]
+
+        # Perform structure analysis
+        analyses = advanced_engine.analyze_content_structure(file_paths)
+
+        if format.lower() == 'json':
+            # Convert to JSON-serializable format
+            json_data = []
+            for analysis in analyses:
+                json_data.append({
+                    'file_path': analysis.file_path,
+                    'heading_hierarchy': analysis.heading_hierarchy,
+                    'word_count': analysis.word_count,
+                    'paragraph_count': analysis.paragraph_count,
+                    'readability_score': analysis.readability_score,
+                    'structure_issues': analysis.structure_issues
+                })
+            click.echo(json.dumps(json_data, indent=2))
+        else:
+            # Format as table
+            click.echo("Content Structure Analysis")
+            click.echo("=" * 80)
+
+            for analysis in analyses:
+                click.echo(f"\nFile: {analysis.file_path}")
+                click.echo(f"Word Count: {analysis.word_count}")
+                click.echo(f"Paragraphs: {analysis.paragraph_count}")
+                if analysis.readability_score:
+                    click.echo(f"Readability Score: {analysis.readability_score:.1f}")
+
+                if analysis.heading_hierarchy:
+                    click.echo("Heading Hierarchy:")
+                    for heading in analysis.heading_hierarchy:
+                        indent = "  " * (heading['level'] - 1)
+                        click.echo(f"  {indent}H{heading['level']}: {heading['text']}")
+
+                if analysis.structure_issues:
+                    click.echo("Structure Issues:")
+                    for issue in analysis.structure_issues:
+                        click.echo(f"  - {issue}")
+
+    except CLIError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        handle_error(e, "performing structure analysis")
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument('file_path')
+@click.option('--directory', '-d', default='.',
+              help='Directory containing the index')
+@click.option('--threshold', '-t', default=0.3, type=float,
+              help='Similarity threshold (0.0 to 1.0)')
+@click.option('--format', '-f', default='table',
+              type=click.Choice(['json', 'table'], case_sensitive=False),
+              help='Output format')
+def similar(file_path: str, directory: str, threshold: float, format: str):
+    """Find content similar to the specified file.
+
+    Uses tag overlap to identify files with similar content based on
+    shared tags and calculates similarity scores.
+
+    Examples:
+      mdquery similar "research/ai-paper.md"
+      mdquery similar "blog/post.md" --threshold 0.5
+      mdquery similar "notes/topic.md" --format json
+    """
+    try:
+        # Resolve directory path
+        dir_path = Path(directory).resolve()
+        if not dir_path.exists():
+            raise CLIError(f"Directory does not exist: {directory}")
+
+        # Get database path
+        db_path = get_database_path(str(dir_path))
+        if not db_path.exists():
+            raise CLIError(f"No index found for directory {directory}. Run 'mdquery index {directory}' first.")
+
+        # Initialize query engine and get advanced engine
+        db_manager = DatabaseManager(db_path)
+        query_engine = QueryEngine(db_manager)
+        advanced_engine = query_engine.get_advanced_engine()
+
+        # Find similar content
+        similarities = advanced_engine.find_similar_content(file_path, threshold)
+
+        if format.lower() == 'json':
+            # Convert to JSON-serializable format
+            json_data = []
+            for sim in similarities:
+                json_data.append({
+                    'file1_path': sim.file1_path,
+                    'file2_path': sim.file2_path,
+                    'common_tags': sim.common_tags,
+                    'similarity_score': sim.similarity_score,
+                    'total_tags_file1': sim.total_tags_file1,
+                    'total_tags_file2': sim.total_tags_file2
+                })
+            click.echo(json.dumps(json_data, indent=2))
+        else:
+            # Format as table
+            if not similarities:
+                click.echo(f"No similar files found for {file_path} (threshold: {threshold})")
+                return
+
+            click.echo(f"Similar Files to {file_path}")
+            click.echo("=" * 80)
+
+            for sim in similarities:
+                click.echo(f"\nFile: {sim.file2_path}")
+                click.echo(f"Similarity: {sim.similarity_score:.3f}")
+                click.echo(f"Common Tags ({len(sim.common_tags)}): {', '.join(sim.common_tags)}")
+                click.echo(f"Tag Counts: {sim.total_tags_file1} vs {sim.total_tags_file2}")
+
+    except CLIError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        handle_error(e, "finding similar content")
+        sys.exit(1)
+
+
+@cli.command()
+@click.option('--directory', '-d', default='.',
+              help='Directory containing the index')
+@click.option('--format', '-f', default='table',
+              type=click.Choice(['json', 'table'], case_sensitive=False),
+              help='Output format')
+def links(directory: str, format: str):
+    """Analyze link relationships between files.
+
+    Identifies bidirectional links, link strength, and relationship patterns
+    to understand content connectivity and navigation structure.
+
+    Examples:
+      mdquery links
+      mdquery links --format json
+    """
+    try:
+        # Resolve directory path
+        dir_path = Path(directory).resolve()
+        if not dir_path.exists():
+            raise CLIError(f"Directory does not exist: {directory}")
+
+        # Get database path
+        db_path = get_database_path(str(dir_path))
+        if not db_path.exists():
+            raise CLIError(f"No index found for directory {directory}. Run 'mdquery index {directory}' first.")
+
+        # Initialize query engine and get advanced engine
+        db_manager = DatabaseManager(db_path)
+        query_engine = QueryEngine(db_manager)
+        advanced_engine = query_engine.get_advanced_engine()
+
+        # Analyze link relationships
+        analyses = advanced_engine.analyze_link_relationships()
+
+        if format.lower() == 'json':
+            # Convert to JSON-serializable format
+            json_data = []
+            for analysis in analyses:
+                json_data.append({
+                    'source_file': analysis.source_file,
+                    'target_file': analysis.target_file,
+                    'link_type': analysis.link_type,
+                    'is_bidirectional': analysis.is_bidirectional,
+                    'link_strength': analysis.link_strength
+                })
+            click.echo(json.dumps(json_data, indent=2))
+        else:
+            # Format as table
+            if not analyses:
+                click.echo("No link relationships found")
+                return
+
+            click.echo("Link Relationship Analysis")
+            click.echo("=" * 80)
+
+            for analysis in analyses[:20]:  # Show top 20
+                bidirectional = " (bidirectional)" if analysis.is_bidirectional else ""
+                click.echo(f"\n{analysis.source_file} -> {analysis.target_file}")
+                click.echo(f"  Type: {analysis.link_type}{bidirectional}")
+                click.echo(f"  Strength: {analysis.link_strength:.1f}")
+
+    except CLIError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        handle_error(e, "analyzing link relationships")
+        sys.exit(1)
+
+
+@cli.command()
+@click.option('--directory', '-d', default='.',
+              help='Directory containing the index')
+@click.option('--format', '-f', default='table',
+              type=click.Choice(['json', 'table'], case_sensitive=False),
+              help='Output format')
+def report(directory: str, format: str):
+    """Generate comprehensive content analysis report.
+
+    Provides aggregated statistics and insights about the entire
+    markdown collection including SEO, structure, and relationship metrics.
+
+    Examples:
+      mdquery report
+      mdquery report --format json
+    """
+    try:
+        # Resolve directory path
+        dir_path = Path(directory).resolve()
+        if not dir_path.exists():
+            raise CLIError(f"Directory does not exist: {directory}")
+
+        # Get database path
+        db_path = get_database_path(str(dir_path))
+        if not db_path.exists():
+            raise CLIError(f"No index found for directory {directory}. Run 'mdquery index {directory}' first.")
+
+        # Initialize query engine and get advanced engine
+        db_manager = DatabaseManager(db_path)
+        query_engine = QueryEngine(db_manager)
+        advanced_engine = query_engine.get_advanced_engine()
+
+        # Generate comprehensive report
+        report_data = advanced_engine.generate_content_report()
+
+        if format.lower() == 'json':
+            click.echo(json.dumps(report_data, indent=2, default=str))
+        else:
+            # Format as readable report
+            click.echo("Content Analysis Report")
+            click.echo("=" * 80)
+
+            # Basic statistics
+            stats = report_data.get('basic_stats', {})
+            click.echo(f"\nBasic Statistics:")
+            click.echo(f"  Total Files: {stats.get('total_files', 0)}")
+            click.echo(f"  Total Words: {stats.get('total_words', 0):,}")
+            click.echo(f"  Average Words per File: {stats.get('avg_word_count', 0):.1f}")
+            click.echo(f"  Empty Files: {stats.get('empty_files', 0)}")
+
+            # Tag statistics
+            tag_stats = report_data.get('tag_stats', {})
+            click.echo(f"\nTag Statistics:")
+            click.echo(f"  Unique Tags: {tag_stats.get('unique_tags', 0)}")
+            click.echo(f"  Average Tags per File: {tag_stats.get('avg_tags_per_file', 0):.1f}")
+
+            # Popular tags
+            popular_tags = report_data.get('popular_tags', [])[:10]
+            if popular_tags:
+                click.echo(f"\nMost Popular Tags:")
+                for tag_info in popular_tags:
+                    click.echo(f"  {tag_info['tag']}: {tag_info['usage_count']} files")
+
+            # Frontmatter coverage
+            frontmatter = report_data.get('frontmatter_coverage', [])[:10]
+            if frontmatter:
+                click.echo(f"\nFrontmatter Field Coverage:")
+                for field_info in frontmatter:
+                    click.echo(f"  {field_info['key']}: {field_info['coverage_percent']:.1f}% ({field_info['file_count']} files)")
+
+            # Quality issues
+            quality_issues = report_data.get('quality_issues', [])[:10]
+            if quality_issues:
+                click.echo(f"\nContent Quality Issues:")
+                for issue in quality_issues:
+                    click.echo(f"  {issue['path']}: {issue['issue_type']} ({issue['word_count']} words)")
+
+    except CLIError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        handle_error(e, "generating report")
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument('aggregation_name')
+@click.option('--directory', '-d', default='.',
+              help='Directory containing the index')
+@click.option('--format', '-f', default='table',
+              type=click.Choice(['json', 'csv', 'table', 'markdown'], case_sensitive=False),
+              help='Output format')
+def aggregate(aggregation_name: str, directory: str, format: str):
+    """Execute predefined aggregation queries for reporting.
+
+    Available aggregations:
+      files_by_directory - File counts and word statistics by directory
+      content_by_month - Content creation/modification trends by month
+      tag_cooccurrence - Tags that frequently appear together
+      link_popularity - Most linked-to content
+      word_count_distribution - Distribution of content lengths
+
+    Examples:
+      mdquery aggregate files_by_directory
+      mdquery aggregate tag_cooccurrence --format csv
+      mdquery aggregate word_count_distribution
+    """
+    try:
+        # Resolve directory path
+        dir_path = Path(directory).resolve()
+        if not dir_path.exists():
+            raise CLIError(f"Directory does not exist: {directory}")
+
+        # Get database path
+        db_path = get_database_path(str(dir_path))
+        if not db_path.exists():
+            raise CLIError(f"No index found for directory {directory}. Run 'mdquery index {directory}' first.")
+
+        # Initialize query engine and get advanced engine
+        db_manager = DatabaseManager(db_path)
+        query_engine = QueryEngine(db_manager)
+        advanced_engine = query_engine.get_advanced_engine()
+
+        # Execute aggregation query
+        result = advanced_engine.execute_aggregation_query(aggregation_name)
+
+        # Format and output results
+        formatted_output = query_engine.format_results(result, format.lower())
+        click.echo(formatted_output)
+
+        # Show execution stats in verbose mode (but not for JSON format to avoid breaking parsing)
+        if logger.isEnabledFor(logging.INFO) and format.lower() != 'json':
+            click.echo(f"\nQuery executed in {result.execution_time_ms:.2f}ms, returned {result.row_count} rows", err=True)
+
+    except CLIError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        handle_error(e, "executing aggregation query")
+        sys.exit(1)
+
+
 if __name__ == '__main__':
     cli()
