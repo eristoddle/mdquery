@@ -3,6 +3,8 @@
 
 # Frontmatter parsing
 python-frontmatter>=1.0.0
+PyYAML>=6.0.0
+toml>=0.10.0
 
 # Command-line interface
 click>=8.0.0

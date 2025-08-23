@@ -13,7 +13,7 @@
   - Write unit tests for database schema creation and validation
   - _Requirements: 4.1, 4.5_
 
-- [ ] 3. Build frontmatter parser component
+- [x] 3. Build frontmatter parser component
   - Implement frontmatter extraction using python-frontmatter library
   - Add type inference for frontmatter values (string, number, boolean, array, date)
   - Handle multiple frontmatter formats (YAML, JSON, TOML)
