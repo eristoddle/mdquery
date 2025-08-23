@@ -20,7 +20,7 @@
   - Write unit tests for frontmatter parsing with various formats and edge cases
   - _Requirements: 1.3, 5.1, 5.2, 5.3, 5.4, 5.5_
 
-- [ ] 4. Build markdown content parser
+- [x] 4. Build markdown content parser
   - Implement markdown parsing to extract content, headings, and word counts
   - Create content sanitization for FTS5 indexing
   - Extract heading hierarchy and structure information
