@@ -15,6 +15,7 @@ from .parsers.frontmatter import FrontmatterParser
 from .parsers.markdown import MarkdownParser
 from .parsers.tags import TagParser
 from .parsers.links import LinkParser
+from .cache import CacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -27,14 +28,16 @@ class IndexingError(Exception):
 class Indexer:
     """Main indexing engine for processing markdown files and populating the database."""
 
-    def __init__(self, database_manager: DatabaseManager):
+    def __init__(self, database_manager: DatabaseManager, cache_manager: Optional[CacheManager] = None):
         """
         Initialize the indexer with database manager and parsers.
 
         Args:
             database_manager: Database manager instance for database operations
+            cache_manager: Optional cache manager for incremental indexing support
         """
         self.db_manager = database_manager
+        self.cache_manager = cache_manager
 
         # Initialize parsers
         self.frontmatter_parser = FrontmatterParser()
@@ -538,3 +541,200 @@ class Indexer:
         with self.db_manager.get_connection() as conn:
             cursor = conn.execute("SELECT COUNT(*) FROM files")
             return cursor.fetchone()[0]
+
+    def incremental_index_directory(self, path: Path, recursive: bool = True) -> Dict[str, int]:
+        """
+        Perform incremental indexing of a directory, only processing modified files.
+
+        Args:
+            path: Directory path to scan
+            recursive: Whether to scan subdirectories
+
+        Returns:
+            Dictionary with indexing statistics
+
+        Raises:
+            IndexingError: If directory doesn't exist or can't be accessed
+        """
+        if not path.exists():
+            raise IndexingError(f"Directory does not exist: {path}")
+
+        if not path.is_dir():
+            raise IndexingError(f"Path is not a directory: {path}")
+
+        logger.info(f"Starting incremental directory indexing: {path} (recursive={recursive})")
+
+        # Reset statistics
+        self.stats = {
+            'files_processed': 0,
+            'files_updated': 0,
+            'files_skipped': 0,
+            'errors': 0
+        }
+
+        # Clean up orphaned entries first if cache manager is available
+        if self.cache_manager:
+            cleanup_stats = self.cache_manager.cleanup_orphaned_entries()
+            logger.info(f"Cleanup completed: {cleanup_stats}")
+
+        # Scan for markdown files
+        markdown_files = self._scan_directory(path, recursive)
+        logger.info(f"Found {len(markdown_files)} markdown files to process")
+
+        # Process each file, but only if it needs updating
+        for file_path in markdown_files:
+            try:
+                if self._should_index_file(file_path):
+                    self.index_file(file_path)
+                    self.stats['files_updated'] += 1
+                else:
+                    self.stats['files_skipped'] += 1
+                    logger.debug(f"Skipped file (no changes): {file_path}")
+
+                self.stats['files_processed'] += 1
+
+            except Exception as e:
+                self.stats['errors'] += 1
+                logger.error(f"Error indexing file {file_path}: {e}")
+
+        # Update cache timestamp if cache manager is available
+        if self.cache_manager:
+            self.cache_manager._update_cache_timestamp()
+
+        logger.info(f"Incremental directory indexing complete. Stats: {self.stats}")
+        return self.stats.copy()
+
+    def remove_file_from_index(self, file_path: Path) -> bool:
+        """
+        Remove a file from the index.
+
+        Args:
+            file_path: Path to file to remove from index
+
+        Returns:
+            True if file was removed, False if file was not in index
+        """
+        try:
+            if self.cache_manager:
+                self.cache_manager.invalidate_file(file_path)
+                return True
+            else:
+                # Fallback to direct database removal
+                with self.db_manager.get_connection() as conn:
+                    cursor = conn.execute("SELECT id FROM files WHERE path = ?", (str(file_path),))
+                    result = cursor.fetchone()
+
+                    if result:
+                        file_id = result['id']
+                        conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
+                        conn.execute("DELETE FROM content_fts WHERE file_id = ?", (file_id,))
+                        conn.commit()
+                        logger.debug(f"Removed file from index: {file_path}")
+                        return True
+                    else:
+                        logger.debug(f"File not found in index: {file_path}")
+                        return False
+
+        except Exception as e:
+            logger.error(f"Error removing file from index {file_path}: {e}")
+            return False
+
+    def get_indexed_files_in_directory(self, directory: Path) -> List[Path]:
+        """
+        Get list of all files currently indexed in a directory.
+
+        Args:
+            directory: Directory to check
+
+        Returns:
+            List of file paths currently in the index
+        """
+        indexed_files = []
+
+        try:
+            with self.db_manager.get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT path FROM files WHERE directory = ? OR directory LIKE ?",
+                    (str(directory), f"{directory}%")
+                )
+
+                for row in cursor.fetchall():
+                    indexed_files.append(Path(row['path']))
+
+        except Exception as e:
+            logger.error(f"Error getting indexed files for directory {directory}: {e}")
+
+        return indexed_files
+
+    def sync_directory_index(self, directory: Path, recursive: bool = True) -> Dict[str, int]:
+        """
+        Synchronize the index with the current state of a directory.
+
+        This method:
+        1. Removes files from index that no longer exist on disk
+        2. Adds/updates files that are new or modified
+        3. Provides comprehensive sync statistics
+
+        Args:
+            directory: Directory to synchronize
+            recursive: Whether to sync subdirectories
+
+        Returns:
+            Dictionary with sync statistics
+        """
+        logger.info(f"Starting directory sync: {directory} (recursive={recursive})")
+
+        sync_stats = {
+            'files_added': 0,
+            'files_updated': 0,
+            'files_removed': 0,
+            'files_unchanged': 0,
+            'errors': 0
+        }
+
+        try:
+            # Get currently indexed files in this directory
+            indexed_files = set(self.get_indexed_files_in_directory(directory))
+
+            # Get current files on disk
+            current_files = set(self._scan_directory(directory, recursive))
+
+            # Files to remove (in index but not on disk)
+            files_to_remove = indexed_files - current_files
+            for file_path in files_to_remove:
+                if self.remove_file_from_index(file_path):
+                    sync_stats['files_removed'] += 1
+                    logger.debug(f"Removed deleted file from index: {file_path}")
+
+            # Files to check for updates (on disk)
+            for file_path in current_files:
+                try:
+                    if file_path in indexed_files:
+                        # File exists in index, check if it needs updating
+                        if self._should_index_file(file_path):
+                            self.index_file(file_path)
+                            sync_stats['files_updated'] += 1
+                            logger.debug(f"Updated modified file: {file_path}")
+                        else:
+                            sync_stats['files_unchanged'] += 1
+                    else:
+                        # New file, add to index
+                        self.index_file(file_path)
+                        sync_stats['files_added'] += 1
+                        logger.debug(f"Added new file to index: {file_path}")
+
+                except Exception as e:
+                    sync_stats['errors'] += 1
+                    logger.error(f"Error syncing file {file_path}: {e}")
+
+            # Update cache timestamp if cache manager is available
+            if self.cache_manager:
+                self.cache_manager._update_cache_timestamp()
+
+            logger.info(f"Directory sync complete. Stats: {sync_stats}")
+            return sync_stats
+
+        except Exception as e:
+            logger.error(f"Error during directory sync: {e}")
+            sync_stats['errors'] += 1
+            return sync_stats
