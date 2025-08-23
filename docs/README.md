@@ -7,6 +7,7 @@ Complete documentation for mdquery - the universal markdown querying tool.
 ### User Guide
 - **[Getting Started](user-guide/README.md)** - Introduction and quick start
 - **[Query Syntax](user-guide/query-syntax.md)** - Complete SQL syntax guide
+- **[MCP Integration](user-guide/mcp-integration.md)** - AI assistant integration guide
 - **[Best Practices](user-guide/best-practices.md)** - Tips for effective usage
 - **[Examples](user-guide/examples/)** - Real-world usage examples
 

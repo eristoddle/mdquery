@@ -29,6 +29,9 @@ This directory contains real-world examples of using mdquery for different workf
 - [Content Metrics](analytics/content-metrics.md) - Measuring content performance and engagement
 - [Knowledge Graphs](analytics/knowledge-graphs.md) - Visualizing connections between notes
 
+### AI Assistant Integration
+- [MCP Workflows](mcp-workflows.md) - Using mdquery with AI assistants through MCP
+
 ## Quick Examples
 
 ### Find Recent Research Notes
