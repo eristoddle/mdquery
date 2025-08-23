@@ -72,7 +72,7 @@
   - Write integration tests for CLI commands and workflows
   - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5_
 
-- [ ] 11. Implement MCP server interface
+- [x] 11. Implement MCP server interface
   - Create MCP server using Model Context Protocol Python SDK
   - Expose query_markdown, get_schema, index_directory, and get_file_content tools
   - Implement proper MCP error handling and response formatting

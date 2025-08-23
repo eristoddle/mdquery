@@ -23,6 +23,7 @@ setup(
     entry_points={
         "console_scripts": [
             "mdquery=mdquery.cli:cli",
+            "mdquery-mcp=mdquery.mcp:main",
         ],
     },
     python_requires=">=3.8",

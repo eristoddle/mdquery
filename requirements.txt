@@ -18,8 +18,8 @@ markdown-extensions>=0.1.0
 # Type checking support (development)
 typing-extensions>=4.0.0
 
-# MCP server dependencies (will be added in task 11)
-# mcp>=0.1.0
+# MCP server dependencies
+mcp>=1.0.0
 
 # Testing dependencies (development)
 pytest>=7.0.0
