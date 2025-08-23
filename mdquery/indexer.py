@@ -5,6 +5,7 @@ File indexing engine for scanning and processing markdown files.
 import hashlib
 import logging
 import os
+import psutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -16,13 +17,13 @@ from .parsers.markdown import MarkdownParser
 from .parsers.tags import TagParser
 from .parsers.links import LinkParser
 from .cache import CacheManager
+from .exceptions import (
+    IndexingError, FileAccessError, FileCorruptedError, DirectoryNotFoundError,
+    ParsingError, ResourceError, PerformanceError
+)
+from .logging_config import performance_timer, monitor_performance, log_error
 
 logger = logging.getLogger(__name__)
-
-
-class IndexingError(Exception):
-    """Custom exception for indexing-related errors."""
-    pass
 
 
 class Indexer:
@@ -56,6 +57,7 @@ class Indexer:
             'errors': 0
         }
 
+    @monitor_performance('directory_indexing')
     def index_directory(self, path: Path, recursive: bool = True) -> Dict[str, int]:
         """
         Recursively scan directory and index all markdown files.
@@ -68,13 +70,17 @@ class Indexer:
             Dictionary with indexing statistics
 
         Raises:
-            IndexingError: If directory doesn't exist or can't be accessed
+            DirectoryNotFoundError: If directory doesn't exist or can't be accessed
+            ResourceError: If system resources are insufficient
         """
         if not path.exists():
-            raise IndexingError(f"Directory does not exist: {path}")
+            raise DirectoryNotFoundError(f"Directory does not exist: {path}", file_path=path)
 
         if not path.is_dir():
-            raise IndexingError(f"Path is not a directory: {path}")
+            raise DirectoryNotFoundError(f"Path is not a directory: {path}", file_path=path)
+
+        # Check available memory and disk space
+        self._check_system_resources()
 
         logger.info(f"Starting directory indexing: {path} (recursive={recursive})")
 
@@ -86,26 +92,44 @@ class Indexer:
             'errors': 0
         }
 
-        # Scan for markdown files
-        markdown_files = self._scan_directory(path, recursive)
-        logger.info(f"Found {len(markdown_files)} markdown files to process")
+        try:
+            # Scan for markdown files
+            with performance_timer('directory_scan', logger):
+                markdown_files = self._scan_directory(path, recursive)
 
-        # Process each file
-        for file_path in markdown_files:
-            try:
-                if self._should_index_file(file_path):
-                    self.index_file(file_path)
-                    self.stats['files_processed'] += 1
-                else:
-                    self.stats['files_skipped'] += 1
-                    logger.debug(f"Skipped file (no changes): {file_path}")
-            except Exception as e:
-                self.stats['errors'] += 1
-                logger.error(f"Error indexing file {file_path}: {e}")
+            logger.info(f"Found {len(markdown_files)} markdown files to process")
 
-        logger.info(f"Directory indexing complete. Stats: {self.stats}")
-        return self.stats.copy()
+            # Process each file with error handling
+            for file_path in markdown_files:
+                try:
+                    if self._should_index_file(file_path):
+                        self.index_file(file_path)
+                        self.stats['files_processed'] += 1
+                    else:
+                        self.stats['files_skipped'] += 1
+                        logger.debug(f"Skipped file (no changes): {file_path}")
+                except (FileAccessError, FileCorruptedError, ParsingError) as e:
+                    self.stats['errors'] += 1
+                    log_error(e, logger, {'operation': 'file_indexing', 'file_path': str(file_path)})
+                except Exception as e:
+                    self.stats['errors'] += 1
+                    # Wrap unexpected errors
+                    wrapped_error = IndexingError(f"Unexpected error indexing file: {e}", file_path=file_path)
+                    log_error(wrapped_error, logger, {'operation': 'file_indexing', 'file_path': str(file_path)})
 
+            logger.info(f"Directory indexing complete. Stats: {self.stats}")
+            return self.stats.copy()
+
+        except PerformanceError:
+            # Re-raise performance errors
+            raise
+        except Exception as e:
+            # Wrap any other unexpected errors
+            wrapped_error = IndexingError(f"Directory indexing failed: {e}", context={'directory': str(path)})
+            log_error(wrapped_error, logger)
+            raise wrapped_error from e
+
+    @monitor_performance('file_indexing')
     def index_file(self, file_path: Path) -> bool:
         """
         Index a single markdown file.
@@ -117,36 +141,56 @@ class Indexer:
             True if file was indexed successfully, False otherwise
 
         Raises:
-            IndexingError: If file doesn't exist or can't be processed
+            FileAccessError: If file doesn't exist or can't be accessed
+            FileCorruptedError: If file is corrupted or can't be processed
+            ParsingError: If file parsing fails
         """
         if not file_path.exists():
-            raise IndexingError(f"File does not exist: {file_path}")
+            raise FileAccessError(f"File does not exist: {file_path}", file_path=file_path)
 
         if not file_path.is_file():
-            raise IndexingError(f"Path is not a file: {file_path}")
+            raise FileAccessError(f"Path is not a file: {file_path}", file_path=file_path)
 
         if file_path.suffix.lower() not in self.markdown_extensions:
-            raise IndexingError(f"File is not a markdown file: {file_path}")
+            raise FileAccessError(f"File is not a markdown file: {file_path}", file_path=file_path)
 
         logger.debug(f"Indexing file: {file_path}")
 
         try:
-            # Extract file metadata
-            file_metadata = self._extract_file_metadata(file_path)
+            # Extract file metadata with error handling
+            try:
+                file_metadata = self._extract_file_metadata(file_path)
+            except (OSError, PermissionError) as e:
+                raise FileAccessError(f"Cannot access file metadata: {e}", file_path=file_path) from e
 
-            # Read and parse file content
-            content = self._read_file_content(file_path)
-            parsed_content = self._parse_content(content)
+            # Read and parse file content with error handling
+            try:
+                content = self._read_file_content(file_path)
+            except (OSError, PermissionError) as e:
+                raise FileAccessError(f"Cannot read file content: {e}", file_path=file_path) from e
+            except UnicodeDecodeError as e:
+                raise FileCorruptedError(f"Cannot decode file content: {e}", file_path=file_path) from e
 
-            # Store in database
-            self._store_file_data(file_metadata, parsed_content)
+            try:
+                parsed_content = self._parse_content(content)
+            except Exception as e:
+                raise ParsingError(f"Failed to parse file content: {e}", file_path=file_path) from e
+
+            # Store in database with error handling
+            try:
+                self._store_file_data(file_metadata, parsed_content)
+            except Exception as e:
+                raise IndexingError(f"Failed to store file data: {e}", file_path=file_path) from e
 
             logger.debug(f"Successfully indexed: {file_path}")
             return True
 
+        except (FileAccessError, FileCorruptedError, ParsingError, IndexingError):
+            # Re-raise known errors
+            raise
         except Exception as e:
-            logger.error(f"Failed to index file {file_path}: {e}")
-            raise IndexingError(f"Failed to index file {file_path}: {e}") from e
+            # Wrap unexpected errors
+            raise IndexingError(f"Unexpected error indexing file: {e}", file_path=file_path) from e
 
     def update_index(self, file_path: Path) -> bool:
         """
@@ -180,7 +224,7 @@ class Indexer:
 
     def _scan_directory(self, path: Path, recursive: bool) -> List[Path]:
         """
-        Scan directory for markdown files.
+        Scan directory for markdown files with comprehensive error handling.
 
         Args:
             path: Directory to scan
@@ -188,31 +232,66 @@ class Indexer:
 
         Returns:
             List of markdown file paths
+
+        Raises:
+            DirectoryNotFoundError: If directory cannot be accessed
         """
         markdown_files = []
+        errors_encountered = []
 
         try:
             if recursive:
                 # Use rglob for recursive scanning
                 for ext in self.markdown_extensions:
                     pattern = f"**/*{ext}"
-                    markdown_files.extend(path.rglob(pattern))
+                    try:
+                        markdown_files.extend(path.rglob(pattern))
+                    except PermissionError as e:
+                        error_msg = f"Permission denied accessing files with pattern {pattern}: {e}"
+                        errors_encountered.append(error_msg)
+                        logger.warning(error_msg)
+                    except OSError as e:
+                        error_msg = f"OS error scanning for pattern {pattern}: {e}"
+                        errors_encountered.append(error_msg)
+                        logger.warning(error_msg)
             else:
                 # Use glob for non-recursive scanning
                 for ext in self.markdown_extensions:
                     pattern = f"*{ext}"
-                    markdown_files.extend(path.glob(pattern))
+                    try:
+                        markdown_files.extend(path.glob(pattern))
+                    except PermissionError as e:
+                        error_msg = f"Permission denied accessing files with pattern {pattern}: {e}"
+                        errors_encountered.append(error_msg)
+                        logger.warning(error_msg)
+                    except OSError as e:
+                        error_msg = f"OS error scanning for pattern {pattern}: {e}"
+                        errors_encountered.append(error_msg)
+                        logger.warning(error_msg)
 
         except PermissionError as e:
-            logger.warning(f"Permission denied accessing directory {path}: {e}")
+            raise DirectoryNotFoundError(f"Permission denied accessing directory {path}: {e}", file_path=path) from e
+        except OSError as e:
+            raise DirectoryNotFoundError(f"OS error accessing directory {path}: {e}", file_path=path) from e
         except Exception as e:
-            logger.error(f"Error scanning directory {path}: {e}")
+            raise DirectoryNotFoundError(f"Unexpected error scanning directory {path}: {e}", file_path=path) from e
 
-        # Filter out non-files and sort
-        markdown_files = [f for f in markdown_files if f.is_file()]
-        markdown_files.sort()
+        # Filter out non-files with error handling
+        valid_files = []
+        for file_path in markdown_files:
+            try:
+                if file_path.is_file():
+                    valid_files.append(file_path)
+            except (OSError, PermissionError) as e:
+                logger.warning(f"Cannot access file {file_path}: {e}")
+                continue
 
-        return markdown_files
+        valid_files.sort()
+
+        if errors_encountered:
+            logger.info(f"Directory scan completed with {len(errors_encountered)} access errors")
+
+        return valid_files
 
     def _should_index_file(self, file_path: Path) -> bool:
         """
@@ -304,18 +383,59 @@ class Indexer:
 
         return hasher.hexdigest()
 
+    def _check_system_resources(self) -> None:
+        """
+        Check system resources before starting intensive operations.
+
+        Raises:
+            ResourceError: If system resources are insufficient
+        """
+        try:
+            # Check available memory (require at least 100MB)
+            memory = psutil.virtual_memory()
+            if memory.available < 100 * 1024 * 1024:  # 100MB
+                raise ResourceError(
+                    f"Insufficient memory: {memory.available / 1024 / 1024:.1f}MB available, need at least 100MB",
+                    resource_type="memory"
+                )
+
+            # Check disk space (require at least 50MB)
+            disk = psutil.disk_usage('/')
+            if disk.free < 50 * 1024 * 1024:  # 50MB
+                raise ResourceError(
+                    f"Insufficient disk space: {disk.free / 1024 / 1024:.1f}MB available, need at least 50MB",
+                    resource_type="disk"
+                )
+
+        except psutil.Error as e:
+            logger.warning(f"Could not check system resources: {e}")
+            # Don't fail if we can't check resources
+
     def _read_file_content(self, file_path: Path) -> str:
         """
-        Read file content with encoding detection.
+        Read file content with encoding detection and error handling.
 
         Args:
             file_path: Path to file
 
         Returns:
             File content as string
+
+        Raises:
+            FileAccessError: If file cannot be accessed
+            FileCorruptedError: If file cannot be decoded
         """
+        # Check file size (warn if > 10MB)
+        try:
+            file_size = file_path.stat().st_size
+            if file_size > 10 * 1024 * 1024:  # 10MB
+                logger.warning(f"Large file detected: {file_path} ({file_size / 1024 / 1024:.1f}MB)")
+        except OSError as e:
+            raise FileAccessError(f"Cannot access file stats: {e}", file_path=file_path) from e
+
         # Try UTF-8 first, then fall back to latin-1
         encodings = ['utf-8', 'utf-8-sig', 'latin-1']
+        last_error = None
 
         for encoding in encodings:
             try:
@@ -323,13 +443,19 @@ class Indexer:
                     content = f.read()
                 logger.debug(f"Successfully read {file_path} with {encoding} encoding")
                 return content
-            except UnicodeDecodeError:
+            except UnicodeDecodeError as e:
+                last_error = e
                 continue
+            except (OSError, PermissionError) as e:
+                raise FileAccessError(f"Cannot read file: {e}", file_path=file_path) from e
             except Exception as e:
-                logger.error(f"Error reading file {file_path}: {e}")
-                raise IndexingError(f"Cannot read file {file_path}: {e}")
+                raise FileAccessError(f"Unexpected error reading file: {e}", file_path=file_path) from e
 
-        raise IndexingError(f"Cannot decode file {file_path} with any supported encoding")
+        # If we get here, all encodings failed
+        raise FileCorruptedError(
+            f"Cannot decode file with any supported encoding (tried: {', '.join(encodings)}): {last_error}",
+            file_path=file_path
+        ) from last_error
 
     def _parse_content(self, content: str) -> ParsedContent:
         """

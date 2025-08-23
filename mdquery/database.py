@@ -7,16 +7,17 @@ and migrations for the mdquery SQLite database with FTS5 support.
 
 import sqlite3
 import logging
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from contextlib import contextmanager
 
+from .exceptions import (
+    DatabaseError, DatabaseConnectionError, DatabaseCorruptionError, SchemaError
+)
+from .logging_config import performance_timer, monitor_performance, log_error
+
 logger = logging.getLogger(__name__)
-
-
-class DatabaseError(Exception):
-    """Custom exception for database-related errors."""
-    pass
 
 
 class DatabaseManager:
@@ -43,52 +44,108 @@ class DatabaseManager:
     @contextmanager
     def get_connection(self):
         """
-        Context manager for database connections.
+        Context manager for database connections with comprehensive error handling.
 
         Yields:
             sqlite3.Connection: Database connection with proper configuration
+
+        Raises:
+            DatabaseConnectionError: If connection cannot be established
+            DatabaseCorruptionError: If database corruption is detected
         """
         if self._connection is None:
             self._connection = self._create_connection()
 
         try:
+            # Test connection health
+            self._connection.execute("SELECT 1").fetchone()
             yield self._connection
+        except sqlite3.DatabaseError as e:
+            if "database disk image is malformed" in str(e).lower():
+                error = DatabaseCorruptionError(f"Database corruption detected: {e}")
+                log_error(error, logger, {'database_path': str(self.db_path)})
+                raise error from e
+            else:
+                error = DatabaseError(f"Database operation failed: {e}")
+                log_error(error, logger, {'database_path': str(self.db_path)})
+                raise error from e
         except Exception as e:
-            self._connection.rollback()
-            logger.error(f"Database operation failed: {e}")
-            raise DatabaseError(f"Database operation failed: {e}") from e
+            try:
+                self._connection.rollback()
+            except Exception:
+                pass  # Ignore rollback errors
+
+            error = DatabaseError(f"Unexpected database error: {e}")
+            log_error(error, logger, {'database_path': str(self.db_path)})
+            raise error from e
 
     def _create_connection(self) -> sqlite3.Connection:
         """
-        Create and configure SQLite connection.
+        Create and configure SQLite connection with comprehensive error handling.
 
         Returns:
             sqlite3.Connection: Configured database connection
+
+        Raises:
+            DatabaseConnectionError: If connection cannot be established
         """
-        try:
-            conn = sqlite3.connect(
-                self.db_path,
-                timeout=30.0,  # 30 second timeout
-                check_same_thread=False
-            )
+        max_retries = 3
+        retry_delay = 1.0
 
-            # Configure connection
-            conn.row_factory = sqlite3.Row  # Enable column access by name
-            conn.execute("PRAGMA foreign_keys = ON")  # Enable foreign key constraints
-            conn.execute("PRAGMA journal_mode = WAL")  # Enable WAL mode for better concurrency
-            conn.execute("PRAGMA synchronous = NORMAL")  # Balance safety and performance
+        for attempt in range(max_retries):
+            try:
+                conn = sqlite3.connect(
+                    self.db_path,
+                    timeout=30.0,  # 30 second timeout
+                    check_same_thread=False
+                )
 
-            # Check FTS5 availability
-            cursor = conn.execute("PRAGMA compile_options")
-            compile_options = [row[0] for row in cursor.fetchall()]
-            if not any("FTS5" in option for option in compile_options):
-                raise DatabaseError("SQLite FTS5 extension is not available")
+                # Configure connection
+                conn.row_factory = sqlite3.Row  # Enable column access by name
 
-            logger.info(f"Database connection established: {self.db_path}")
-            return conn
+                # Set pragmas with error handling
+                try:
+                    conn.execute("PRAGMA foreign_keys = ON")  # Enable foreign key constraints
+                    conn.execute("PRAGMA journal_mode = WAL")  # Enable WAL mode for better concurrency
+                    conn.execute("PRAGMA synchronous = NORMAL")  # Balance safety and performance
+                    conn.execute("PRAGMA temp_store = MEMORY")  # Use memory for temp storage
+                    conn.execute("PRAGMA cache_size = -64000")  # 64MB cache
+                except sqlite3.Error as e:
+                    logger.warning(f"Failed to set some PRAGMA options: {e}")
 
-        except sqlite3.Error as e:
-            raise DatabaseError(f"Failed to connect to database: {e}") from e
+                # Check FTS5 availability
+                try:
+                    cursor = conn.execute("PRAGMA compile_options")
+                    compile_options = [row[0] for row in cursor.fetchall()]
+                    if not any("FTS5" in option for option in compile_options):
+                        raise DatabaseConnectionError("SQLite FTS5 extension is not available")
+                except sqlite3.Error as e:
+                    raise DatabaseConnectionError(f"Failed to check FTS5 availability: {e}") from e
+
+                # Test basic functionality
+                try:
+                    conn.execute("SELECT 1").fetchone()
+                except sqlite3.Error as e:
+                    raise DatabaseConnectionError(f"Database connection test failed: {e}") from e
+
+                logger.info(f"Database connection established: {self.db_path}")
+                return conn
+
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e).lower() and attempt < max_retries - 1:
+                    logger.warning(f"Database locked, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
+                else:
+                    raise DatabaseConnectionError(f"Failed to connect to database after {max_retries} attempts: {e}") from e
+            except sqlite3.Error as e:
+                raise DatabaseConnectionError(f"Failed to connect to database: {e}") from e
+            except Exception as e:
+                raise DatabaseConnectionError(f"Unexpected error connecting to database: {e}") from e
+
+        # This should never be reached, but just in case
+        raise DatabaseConnectionError(f"Failed to connect to database after {max_retries} attempts")
 
     def initialize_database(self) -> None:
         """

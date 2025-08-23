@@ -11,22 +11,23 @@ from datetime import datetime
 
 import click
 
-from .database import DatabaseManager, DatabaseError
-from .indexer import Indexer, IndexingError
-from .query import QueryEngine, QueryError, QueryValidationError, QueryExecutionError
+from .database import DatabaseManager
+from .indexer import Indexer
+from .query import QueryEngine
 from .cache import CacheManager
 from .research import ResearchEngine, ResearchFilter
-
-
-# Configure logging
-logging.basicConfig(
-    level=logging.WARNING,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+from .exceptions import (
+    MdqueryError, DatabaseError, IndexingError, QueryError,
+    QueryValidationError, QueryExecutionError, QueryTimeoutError,
+    FileAccessError, FileCorruptedError, DirectoryNotFoundError,
+    PerformanceError, ResourceError, format_error_context
 )
+from .logging_config import setup_logging, log_error, get_logging_statistics
+
 logger = logging.getLogger(__name__)
 
 
-class CLIError(Exception):
+class CLIError(MdqueryError):
     """Custom exception for CLI-related errors."""
     pass
 
@@ -38,28 +39,64 @@ def get_database_path(directory: str) -> Path:
 
 def ensure_database_directory(db_path: Path) -> None:
     """Ensure the database directory exists."""
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+    except (OSError, PermissionError) as e:
+        raise CLIError(f"Cannot create database directory: {e}") from e
 
 
-def handle_error(error: Exception, context: str = "") -> None:
-    """Handle errors with user-friendly messages."""
-    if isinstance(error, (DatabaseError, IndexingError, QueryError)):
-        click.echo(f"Error {context}: {error}", err=True)
+def handle_error(error: Exception, context: str = "", verbose: bool = False) -> None:
+    """
+    Handle errors with user-friendly messages and appropriate exit codes.
+
+    Args:
+        error: Exception that occurred
+        context: Context description for the error
+        verbose: Whether to show detailed error information
+    """
+    if isinstance(error, MdqueryError):
+        # Handle known mdquery errors with context
+        error_context = format_error_context(error)
+        if verbose and error_context != "no context":
+            click.echo(f"Error {context}: {error} | {error_context}", err=True)
+        else:
+            click.echo(f"Error {context}: {error}", err=True)
+
+        # Set appropriate exit codes
+        if isinstance(error, (FileAccessError, DirectoryNotFoundError)):
+            sys.exit(2)  # File/directory not found
+        elif isinstance(error, QueryValidationError):
+            sys.exit(3)  # Invalid query
+        elif isinstance(error, QueryTimeoutError):
+            sys.exit(4)  # Timeout
+        elif isinstance(error, (PerformanceError, ResourceError)):
+            sys.exit(5)  # Resource/performance issues
+        else:
+            sys.exit(1)  # General error
+
     elif isinstance(error, FileNotFoundError):
         click.echo(f"Error {context}: File or directory not found: {error.filename}", err=True)
+        sys.exit(2)
     elif isinstance(error, PermissionError):
         click.echo(f"Error {context}: Permission denied: {error.filename}", err=True)
+        sys.exit(2)
     else:
+        # Unexpected error
         click.echo(f"Unexpected error {context}: {error}", err=True)
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.exception("Unexpected error details")
+        if verbose:
+            import traceback
+            click.echo(traceback.format_exc(), err=True)
+        sys.exit(1)
 
 
 @click.group()
 @click.version_option(version='1.0.0')
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose logging')
 @click.option('--debug', is_flag=True, help='Enable debug logging')
-def cli(verbose: bool, debug: bool):
+@click.option('--log-file', type=click.Path(), help='Log file path')
+@click.option('--structured-logs', is_flag=True, help='Enable structured JSON logging')
+@click.pass_context
+def cli(ctx: click.Context, verbose: bool, debug: bool, log_file: Optional[str], structured_logs: bool):
     """mdquery - Universal markdown querying tool with SQL-like syntax.
 
     Query your markdown files using SQL syntax across different note-taking systems
@@ -70,10 +107,25 @@ def cli(verbose: bool, debug: bool):
       mdquery index ./notes --recursive
       mdquery schema --table files
     """
-    if debug:
-        logging.getLogger().setLevel(logging.DEBUG)
-    elif verbose:
-        logging.getLogger().setLevel(logging.INFO)
+    # Set up logging based on options
+    level = "DEBUG" if debug else ("INFO" if verbose else "WARNING")
+    log_file_path = Path(log_file) if log_file else None
+
+    try:
+        setup_logging(
+            level=level,
+            log_file=log_file_path,
+            structured=structured_logs,
+            enable_performance_monitoring=True
+        )
+    except Exception as e:
+        click.echo(f"Failed to setup logging: {e}", err=True)
+        sys.exit(1)
+
+    # Store options in context for use by subcommands
+    ctx.ensure_object(dict)
+    ctx.obj['verbose'] = verbose or debug
+    ctx.obj['debug'] = debug
 
 
 @cli.command()
@@ -87,7 +139,9 @@ def cli(verbose: bool, debug: bool):
               help='Maximum number of results to return')
 @click.option('--timeout', '-t', type=float, default=30.0,
               help='Query timeout in seconds')
-def query(sql_query: str, format: str, directory: str, limit: Optional[int], timeout: float):
+@click.pass_context
+def query(ctx: click.Context, sql_query: str, format: str, directory: str,
+          limit: Optional[int], timeout: float):
     """Execute a SQL query against indexed markdown files.
 
     The query will be executed against the database for the specified directory.
@@ -98,8 +152,50 @@ def query(sql_query: str, format: str, directory: str, limit: Optional[int], tim
       mdquery query "SELECT * FROM files WHERE modified_date > '2024-01-01'" --format json
       mdquery query "SELECT tag, COUNT(*) as count FROM tags GROUP BY tag ORDER BY count DESC" --limit 10
     """
+    verbose = ctx.obj.get('verbose', False)
+
     try:
-        # Resolve directory path
+        # Get database path and check if it exists
+        db_path = get_database_path(directory)
+        if not db_path.exists():
+            raise CLIError(f"No index found for directory '{directory}'. Run 'mdquery index {directory}' first.")
+
+        # Initialize database and query engine
+        try:
+            db_manager = DatabaseManager(db_path)
+            query_engine = QueryEngine(db_manager)
+        except Exception as e:
+            raise CLIError(f"Failed to initialize database: {e}") from e
+
+        # Configure query engine
+        if limit:
+            query_engine.set_max_results(limit)
+        query_engine.set_query_timeout(timeout)
+
+        # Execute query
+        logger.info(f"Executing query: {sql_query}")
+        result = query_engine.execute_query(sql_query)
+
+        # Format and output results
+        try:
+            formatted_output = query_engine.format_results(result, format)
+            click.echo(formatted_output)
+        except Exception as e:
+            raise CLIError(f"Failed to format results: {e}") from e
+
+        # Log performance info in verbose mode
+        if verbose:
+            click.echo(f"\n# Query executed in {result.execution_time_ms:.2f}ms, returned {result.row_count} rows", err=True)
+
+    except (MdqueryError, FileNotFoundError, PermissionError) as e:
+        handle_error(e, "executing query", verbose)
+    except KeyboardInterrupt:
+        click.echo("\nQuery interrupted by user", err=True)
+        sys.exit(130)  # Standard exit code for SIGINT
+    except Exception as e:
+        wrapped_error = CLIError(f"Unexpected error during query execution: {e}")
+        log_error(wrapped_error, logger, {'query': sql_query, 'directory': directory})
+        handle_error(wrapped_error, "executing query", verbose)
         dir_path = Path(directory).resolve()
         if not dir_path.exists():
             raise CLIError(f"Directory does not exist: {directory}")
@@ -1320,6 +1416,257 @@ def research_summary(directory: str, date_from: Optional[datetime], date_to: Opt
     except Exception as e:
         handle_error(e, "generating research summary")
         sys.exit(1)
+
+
+if __name__ == '__main__':
+    cli()
+@cli.c
+ommand()
+@click.argument('directory', type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path))
+@click.option('--recursive/--no-recursive', default=True,
+              help='Recursively scan subdirectories')
+@click.option('--incremental/--full', default=True,
+              help='Perform incremental indexing (only modified files)')
+@click.option('--force', is_flag=True,
+              help='Force full reindex even if cache exists')
+@click.pass_context
+def index(ctx: click.Context, directory: Path, recursive: bool, incremental: bool, force: bool):
+    """Index markdown files in a directory.
+
+    Scans the specified directory for markdown files and creates a searchable index.
+    By default, performs incremental indexing to only process modified files.
+
+    Examples:
+      mdquery index ./notes
+      mdquery index ./docs --no-recursive
+      mdquery index ./blog --full --force
+    """
+    verbose = ctx.obj.get('verbose', False)
+
+    try:
+        # Get database path and ensure directory exists
+        db_path = get_database_path(str(directory))
+        ensure_database_directory(db_path)
+
+        # Initialize database and indexer
+        try:
+            db_manager = DatabaseManager(db_path)
+            db_manager.initialize_database()
+
+            cache_manager = CacheManager(db_path.parent / 'cache.json')
+            indexer = Indexer(db_manager, cache_manager)
+        except Exception as e:
+            raise CLIError(f"Failed to initialize indexer: {e}") from e
+
+        # Determine indexing strategy
+        if force:
+            click.echo(f"Force rebuilding index for: {directory}")
+            stats = indexer.rebuild_index(directory)
+        elif incremental:
+            click.echo(f"Incrementally indexing: {directory} (recursive={recursive})")
+            stats = indexer.incremental_index_directory(directory, recursive)
+        else:
+            click.echo(f"Full indexing: {directory} (recursive={recursive})")
+            stats = indexer.index_directory(directory, recursive)
+
+        # Display results
+        click.echo(f"\nIndexing complete:")
+        click.echo(f"  Files processed: {stats['files_processed']}")
+        if 'files_updated' in stats:
+            click.echo(f"  Files updated: {stats['files_updated']}")
+        if 'files_skipped' in stats:
+            click.echo(f"  Files skipped: {stats['files_skipped']}")
+        if stats.get('errors', 0) > 0:
+            click.echo(f"  Errors encountered: {stats['errors']}", err=True)
+            if verbose:
+                click.echo("  Use --debug for detailed error information", err=True)
+
+        # Show performance stats in verbose mode
+        if verbose:
+            from .logging_config import get_performance_monitor
+            monitor = get_performance_monitor()
+            perf_stats = monitor.get_statistics()
+            if perf_stats:
+                click.echo(f"\nPerformance statistics:", err=True)
+                for operation, stats_data in perf_stats.items():
+                    if stats_data and stats_data.get('count', 0) > 0:
+                        click.echo(f"  {operation}: {stats_data['avg_duration']:.3f}s avg "
+                                 f"({stats_data['count']} operations)", err=True)
+
+    except (MdqueryError, FileNotFoundError, PermissionError) as e:
+        handle_error(e, "indexing directory", verbose)
+    except KeyboardInterrupt:
+        click.echo("\nIndexing interrupted by user", err=True)
+        sys.exit(130)  # Standard exit code for SIGINT
+    except Exception as e:
+        wrapped_error = CLIError(f"Unexpected error during indexing: {e}")
+        log_error(wrapped_error, logger, {'directory': str(directory), 'recursive': recursive})
+        handle_error(wrapped_error, "indexing directory", verbose)
+
+
+@cli.command()
+@click.option('--directory', '-d', default='.',
+              help='Directory containing indexed markdown files')
+@click.option('--table', '-t', help='Show schema for specific table')
+@click.option('--stats', is_flag=True, help='Show database statistics')
+@click.pass_context
+def schema(ctx: click.Context, directory: str, table: Optional[str], stats: bool):
+    """Show database schema information.
+
+    Displays the database schema, table structures, and optionally statistics
+    about the indexed data.
+
+    Examples:
+      mdquery schema
+      mdquery schema --table files
+      mdquery schema --stats
+    """
+    verbose = ctx.obj.get('verbose', False)
+
+    try:
+        # Get database path and check if it exists
+        db_path = get_database_path(directory)
+        if not db_path.exists():
+            raise CLIError(f"No index found for directory '{directory}'. Run 'mdquery index {directory}' first.")
+
+        # Initialize database manager
+        try:
+            db_manager = DatabaseManager(db_path)
+        except Exception as e:
+            raise CLIError(f"Failed to access database: {e}") from e
+
+        # Get schema information
+        schema_info = db_manager.get_schema_info()
+
+        if table:
+            # Show specific table schema
+            if table in schema_info['tables']:
+                table_info = schema_info['tables'][table]
+                click.echo(f"Table: {table}")
+                click.echo(f"Rows: {table_info['row_count']}")
+                click.echo("\nColumns:")
+                for col in table_info['columns']:
+                    pk_marker = " (PRIMARY KEY)" if col['primary_key'] else ""
+                    null_marker = " NOT NULL" if col['not_null'] else ""
+                    click.echo(f"  {col['name']}: {col['type']}{null_marker}{pk_marker}")
+            else:
+                available_tables = ', '.join(schema_info['tables'].keys())
+                raise CLIError(f"Table '{table}' not found. Available tables: {available_tables}")
+
+        elif stats:
+            # Show database statistics
+            click.echo("Database Statistics:")
+            click.echo(f"Schema version: {schema_info['version']}")
+            click.echo(f"Tables: {len(schema_info['tables'])}")
+            click.echo(f"Views: {len(schema_info['views'])}")
+            click.echo(f"Indexes: {len(schema_info['indexes'])}")
+
+            click.echo("\nTable Statistics:")
+            for table_name, table_info in schema_info['tables'].items():
+                click.echo(f"  {table_name}: {table_info['row_count']} rows")
+
+        else:
+            # Show full schema overview
+            click.echo("Database Schema Overview:")
+            click.echo(f"Version: {schema_info['version']}")
+
+            click.echo("\nTables:")
+            for table_name, table_info in schema_info['tables'].items():
+                click.echo(f"  {table_name} ({table_info['row_count']} rows)")
+
+            click.echo("\nViews:")
+            for view_name in schema_info['views'].keys():
+                click.echo(f"  {view_name}")
+
+            if verbose:
+                click.echo(f"\nIndexes: {len(schema_info['indexes'])}")
+                for index_info in schema_info['indexes']:
+                    click.echo(f"  {index_info['name']}")
+
+    except (MdqueryError, FileNotFoundError, PermissionError) as e:
+        handle_error(e, "showing schema", verbose)
+    except Exception as e:
+        wrapped_error = CLIError(f"Unexpected error showing schema: {e}")
+        log_error(wrapped_error, logger, {'directory': directory})
+        handle_error(wrapped_error, "showing schema", verbose)
+
+
+@cli.command()
+@click.option('--directory', '-d', default='.',
+              help='Directory containing indexed markdown files')
+@click.option('--hours', type=int, default=24,
+              help='Number of hours to look back for statistics')
+@click.pass_context
+def stats(ctx: click.Context, directory: str, hours: int):
+    """Show performance and error statistics.
+
+    Displays comprehensive statistics about indexing performance,
+    query execution times, and any errors encountered.
+
+    Examples:
+      mdquery stats
+      mdquery stats --hours 48
+    """
+    verbose = ctx.obj.get('verbose', False)
+
+    try:
+        # Get logging statistics
+        logging_stats = get_logging_statistics()
+
+        click.echo("Performance Statistics:")
+        perf_stats = logging_stats.get('performance_stats', {})
+        if perf_stats:
+            for operation, stats_data in perf_stats.items():
+                if stats_data and stats_data.get('count', 0) > 0:
+                    click.echo(f"  {operation}:")
+                    click.echo(f"    Operations: {stats_data['count']}")
+                    click.echo(f"    Average time: {stats_data['avg_duration']:.3f}s")
+                    click.echo(f"    Min time: {stats_data['min_duration']:.3f}s")
+                    click.echo(f"    Max time: {stats_data['max_duration']:.3f}s")
+                    if stats_data.get('threshold_violations', 0) > 0:
+                        click.echo(f"    Threshold violations: {stats_data['threshold_violations']}")
+        else:
+            click.echo("  No performance data available")
+
+        click.echo(f"\nError Statistics (last {hours} hours):")
+        error_stats = logging_stats.get('error_stats', {})
+        if error_stats.get('total_errors', 0) > 0:
+            click.echo(f"  Total errors: {error_stats['total_errors']}")
+            click.echo("  Error types:")
+            for error_type, count in error_stats.get('error_types', {}).items():
+                click.echo(f"    {error_type}: {count}")
+
+            if verbose and error_stats.get('recent_errors'):
+                click.echo("\n  Recent errors:")
+                for error in error_stats['recent_errors'][-5:]:  # Show last 5
+                    click.echo(f"    {error['timestamp']}: {error['error_type']} - {error['error_message']}")
+        else:
+            click.echo("  No errors recorded")
+
+        # Show database statistics if available
+        db_path = get_database_path(directory)
+        if db_path.exists():
+            try:
+                db_manager = DatabaseManager(db_path)
+                schema_info = db_manager.get_schema_info()
+
+                click.echo(f"\nDatabase Statistics:")
+                total_files = schema_info['tables'].get('files', {}).get('row_count', 0)
+                total_tags = schema_info['tables'].get('tags', {}).get('row_count', 0)
+                total_links = schema_info['tables'].get('links', {}).get('row_count', 0)
+
+                click.echo(f"  Indexed files: {total_files}")
+                click.echo(f"  Total tags: {total_tags}")
+                click.echo(f"  Total links: {total_links}")
+
+            except Exception as e:
+                if verbose:
+                    click.echo(f"\nCould not access database statistics: {e}", err=True)
+
+    except Exception as e:
+        wrapped_error = CLIError(f"Unexpected error showing statistics: {e}")
+        log_error(wrapped_error, logger, {'directory': directory})
+        handle_error(wrapped_error, "showing statistics", verbose)
 
 
 if __name__ == '__main__':

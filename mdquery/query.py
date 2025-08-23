@@ -13,29 +13,21 @@ import csv
 import io
 import time
 import logging
+import signal
 from typing import Any, Dict, List, Optional, Union, Set
 from pathlib import Path
 from dataclasses import asdict
+from contextlib import contextmanager
 
 from .models import QueryResult
 from .database import DatabaseManager, DatabaseError
+from .exceptions import (
+    QueryError, QueryValidationError, QueryExecutionError, QueryTimeoutError,
+    PerformanceError
+)
+from .logging_config import performance_timer, monitor_performance, log_error
 
 logger = logging.getLogger(__name__)
-
-
-class QueryError(Exception):
-    """Custom exception for query-related errors."""
-    pass
-
-
-class QueryValidationError(QueryError):
-    """Exception raised when query validation fails."""
-    pass
-
-
-class QueryExecutionError(QueryError):
-    """Exception raised when query execution fails."""
-pass
 
 
 class QueryEngine:
@@ -84,9 +76,10 @@ class QueryEngine:
         self._query_timeout = 30.0  # 30 second timeout
         self._max_results = 10000  # Maximum number of results
 
+    @monitor_performance('query_execution')
     def execute_query(self, sql: str, params: Optional[Dict[str, Any]] = None) -> QueryResult:
         """
-        Execute SQL query with validation and error handling.
+        Execute SQL query with validation, timeout protection, and comprehensive error handling.
 
         Args:
             sql: SQL query string
@@ -98,52 +91,77 @@ class QueryEngine:
         Raises:
             QueryValidationError: If query validation fails
             QueryExecutionError: If query execution fails
+            QueryTimeoutError: If query execution times out
         """
-        # Validate query
-        self.validate_query(sql)
+        # Validate query first
+        try:
+            self.validate_query(sql)
+        except Exception as e:
+            log_error(e, logger, {'query': sql, 'operation': 'query_validation'})
+            raise
 
-        # Execute query with timing
+        # Execute query with timing and timeout protection
         start_time = time.time()
 
         try:
-            with self.db_manager.get_connection() as conn:
-                # Set query timeout
-                conn.execute(f"PRAGMA busy_timeout = {int(self._query_timeout * 1000)}")
+            with self._query_timeout_context():
+                with self.db_manager.get_connection() as conn:
+                    # Set query timeout
+                    conn.execute(f"PRAGMA busy_timeout = {int(self._query_timeout * 1000)}")
 
-                # Execute query
-                if params:
-                    cursor = conn.execute(sql, params)
-                else:
-                    cursor = conn.execute(sql)
+                    # Execute query with timeout protection
+                    try:
+                        if params:
+                            cursor = conn.execute(sql, params)
+                        else:
+                            cursor = conn.execute(sql)
 
-                # Fetch results
-                rows = cursor.fetchall()
+                        # Fetch results with memory monitoring
+                        rows = self._fetch_results_safely(cursor)
 
-                # Convert sqlite3.Row objects to dictionaries
-                result_rows = [dict(row) for row in rows]
+                        # Convert sqlite3.Row objects to dictionaries
+                        result_rows = [dict(row) for row in rows]
 
-                # Get column names
-                columns = [description[0] for description in cursor.description] if cursor.description else []
+                        # Get column names
+                        columns = [description[0] for description in cursor.description] if cursor.description else []
 
-                # Check result size limit
-                if len(result_rows) > self._max_results:
-                    logger.warning(f"Query returned {len(result_rows)} rows, truncating to {self._max_results}")
-                    result_rows = result_rows[:self._max_results]
+                        # Check result size limit
+                        if len(result_rows) > self._max_results:
+                            logger.warning(f"Query returned {len(result_rows)} rows, truncating to {self._max_results}")
+                            result_rows = result_rows[:self._max_results]
 
-                execution_time = (time.time() - start_time) * 1000  # Convert to milliseconds
+                        execution_time = (time.time() - start_time) * 1000  # Convert to milliseconds
 
-                return QueryResult(
-                    rows=result_rows,
-                    columns=columns,
-                    row_count=len(result_rows),
-                    execution_time_ms=execution_time,
-                    query=sql
-                )
+                        # Log performance metrics
+                        logger.debug(f"Query executed successfully in {execution_time:.2f}ms, returned {len(result_rows)} rows")
 
+                        return QueryResult(
+                            rows=result_rows,
+                            columns=columns,
+                            row_count=len(result_rows),
+                            execution_time_ms=execution_time,
+                            query=sql
+                        )
+
+                    except sqlite3.OperationalError as e:
+                        if "database is locked" in str(e).lower():
+                            raise QueryTimeoutError(f"Query timed out (database locked): {e}", query=sql) from e
+                        else:
+                            raise QueryExecutionError(f"Query execution failed: {e}", query=sql) from e
+
+        except QueryTimeoutError:
+            # Re-raise timeout errors
+            raise
         except sqlite3.Error as e:
             execution_time = (time.time() - start_time) * 1000
-            logger.error(f"Query execution failed after {execution_time:.2f}ms: {e}")
-            raise QueryExecutionError(f"Query execution failed: {e}") from e
+            error = QueryExecutionError(f"Query execution failed after {execution_time:.2f}ms: {e}", query=sql)
+            log_error(error, logger, {'execution_time_ms': execution_time, 'operation': 'query_execution'})
+            raise error from e
+        except Exception as e:
+            execution_time = (time.time() - start_time) * 1000
+            error = QueryExecutionError(f"Unexpected error during query execution: {e}", query=sql)
+            log_error(error, logger, {'execution_time_ms': execution_time, 'operation': 'query_execution'})
+            raise error from e
 
     def validate_query(self, sql: str) -> bool:
         """
@@ -422,6 +440,74 @@ class QueryEngine:
             max_results: Maximum number of results
         """
         self._max_results = max(1, max_results)
+
+    @contextmanager
+    def _query_timeout_context(self):
+        """Context manager for query timeout protection."""
+        def timeout_handler(signum, frame):
+            raise QueryTimeoutError(f"Query execution timed out after {self._query_timeout} seconds")
+
+        # Set up timeout signal (Unix only)
+        old_handler = None
+        try:
+            if hasattr(signal, 'SIGALRM'):
+                old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(int(self._query_timeout))
+
+            yield
+
+        finally:
+            # Clean up timeout signal
+            if hasattr(signal, 'SIGALRM'):
+                signal.alarm(0)
+                if old_handler is not None:
+                    signal.signal(signal.SIGALRM, old_handler)
+
+    def _fetch_results_safely(self, cursor: sqlite3.Cursor) -> List[sqlite3.Row]:
+        """
+        Safely fetch query results with memory monitoring.
+
+        Args:
+            cursor: SQLite cursor with executed query
+
+        Returns:
+            List of result rows
+
+        Raises:
+            QueryExecutionError: If memory limits are exceeded
+        """
+        rows = []
+        row_count = 0
+
+        try:
+            for row in cursor:
+                rows.append(row)
+                row_count += 1
+
+                # Check memory usage periodically
+                if row_count % 1000 == 0:
+                    try:
+                        import psutil
+                        memory = psutil.virtual_memory()
+                        if memory.percent > 90:  # More than 90% memory usage
+                            raise QueryExecutionError(
+                                f"Query aborted due to high memory usage ({memory.percent:.1f}%) after {row_count} rows"
+                            )
+                    except ImportError:
+                        # psutil not available, skip memory check
+                        pass
+
+                # Check row count limit
+                if row_count > self._max_results * 2:  # Allow some buffer
+                    logger.warning(f"Query returned more than {self._max_results * 2} rows, stopping fetch")
+                    break
+
+        except Exception as e:
+            if row_count > 0:
+                logger.warning(f"Error during result fetch after {row_count} rows: {e}")
+            raise
+
+        return rows
 
     def explain_query(self, sql: str) -> Dict[str, Any]:
         """
