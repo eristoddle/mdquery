@@ -22,6 +22,8 @@ from .indexer import Indexer
 from .query import QueryEngine
 from .cache import CacheManager
 from .research import ResearchEngine, ResearchFilter
+from .config import SimplifiedConfig, create_helpful_error_message
+from .exceptions import ConfigurationError, MdqueryError
 
 logger = logging.getLogger(__name__)
 
@@ -39,22 +41,36 @@ class MDQueryMCPServer:
     and retrieving schema information through the Model Context Protocol.
     """
 
-    def __init__(self, db_path: Optional[Path] = None, cache_dir: Optional[Path] = None, notes_dirs: Optional[List[Path]] = None):
+    def __init__(self, config: Optional[SimplifiedConfig] = None,
+                 db_path: Optional[Path] = None, cache_dir: Optional[Path] = None,
+                 notes_dirs: Optional[List[Path]] = None):
         """
-        Initialize MCP server with database and indexing components.
+        Initialize MCP server with simplified configuration or legacy parameters.
 
         Args:
-            db_path: Path to SQLite database file
-            cache_dir: Directory for cache files
-            notes_dirs: List of directories containing markdown files to auto-index
+            config: SimplifiedConfig instance (preferred)
+            db_path: Path to SQLite database file (legacy)
+            cache_dir: Directory for cache files (legacy)
+            notes_dirs: List of directories containing markdown files to auto-index (legacy)
         """
-        self.db_path = db_path or Path.home() / ".mdquery" / "mdquery.db"
-        self.cache_dir = cache_dir or Path.home() / ".mdquery" / "cache"
-        self.notes_dirs = notes_dirs or []
+        if config:
+            # Use new simplified configuration
+            self.config = config
+            self.db_path = config.config.db_path
+            self.cache_dir = config.config.cache_dir
+            self.notes_dirs = [config.config.notes_dir]
+            self.auto_index = config.config.auto_index
+        else:
+            # Legacy initialization for backward compatibility
+            self.config = None
+            self.db_path = db_path or Path.home() / ".mdquery" / "mdquery.db"
+            self.cache_dir = cache_dir or Path.home() / ".mdquery" / "cache"
+            self.notes_dirs = notes_dirs or []
+            self.auto_index = True
 
-        # Ensure directories exist
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+            # Ensure directories exist (legacy behavior)
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize components
         self.db_manager: Optional[DatabaseManager] = None
@@ -919,18 +935,24 @@ class MDQueryMCPServer:
                 cache_manager=self.cache_manager
             )
 
-            # Auto-index notes directories if specified
-            if self.notes_dirs:
+            # Auto-index notes directories if enabled and specified
+            if self.auto_index and self.notes_dirs:
                 for notes_dir in self.notes_dirs:
                     if notes_dir.exists():
                         logger.info(f"Auto-indexing notes directory: {notes_dir}")
                         try:
-                            self.indexer.incremental_index_directory(notes_dir, recursive=True)
-                            logger.info(f"Auto-indexing completed for: {notes_dir}")
+                            # Use incremental indexing for better performance
+                            stats = self.indexer.incremental_index_directory(notes_dir, recursive=True)
+                            logger.info(f"Auto-indexing completed for {notes_dir}: {stats}")
                         except Exception as e:
                             logger.warning(f"Auto-indexing failed for {notes_dir}: {e}")
+                            # Continue with other directories even if one fails
                     else:
                         logger.warning(f"Notes directory does not exist: {notes_dir}")
+            elif self.auto_index:
+                logger.info("Auto-indexing enabled but no notes directories specified")
+            else:
+                logger.info("Auto-indexing disabled")
 
             logger.info("MCP server components initialized successfully")
 
@@ -1039,19 +1061,29 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="mdquery MCP Server")
     parser.add_argument(
+        "--notes-dir",
+        type=Path,
+        help="Directory containing markdown files (required for simplified config)"
+    )
+    parser.add_argument(
         "--db-path",
         type=Path,
-        help="Path to SQLite database file (overrides MDQUERY_DB_PATH env var)"
+        help="Path to SQLite database file (optional, defaults to notes-dir/.mdquery/mdquery.db)"
     )
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        help="Directory for cache files (overrides MDQUERY_CACHE_DIR env var)"
+        help="Directory for cache files (optional, defaults to notes-dir/.mdquery/cache)"
     )
     parser.add_argument(
-        "--notes-dir",
+        "--no-auto-index",
+        action="store_true",
+        help="Disable automatic indexing on startup"
+    )
+    parser.add_argument(
+        "--config",
         type=Path,
-        help="Directory containing markdown files to index (overrides MDQUERY_NOTES_DIR env var)"
+        help="Load configuration from JSON file"
     )
     parser.add_argument(
         "--debug",
@@ -1064,42 +1096,85 @@ def main():
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    # Get configuration from environment variables or command line args
-    db_path = args.db_path
-    if not db_path and os.getenv('MDQUERY_DB_PATH'):
-        db_path = Path(os.getenv('MDQUERY_DB_PATH')).expanduser()
-
-    cache_dir = args.cache_dir
-    if not cache_dir and os.getenv('MDQUERY_CACHE_DIR'):
-        cache_dir = Path(os.getenv('MDQUERY_CACHE_DIR')).expanduser()
-
-    # Handle notes directories (can be comma-separated)
-    notes_dirs = []
-    if args.notes_dir:
-        if ',' in str(args.notes_dir):
-            notes_dirs = [Path(p.strip()).expanduser() for p in str(args.notes_dir).split(',')]
-        else:
-            notes_dirs = [args.notes_dir.expanduser()]
-    elif os.getenv('MDQUERY_NOTES_DIR'):
-        notes_dir_env = os.getenv('MDQUERY_NOTES_DIR')
-        if ',' in notes_dir_env:
-            notes_dirs = [Path(p.strip()).expanduser() for p in notes_dir_env.split(',')]
-        else:
-            notes_dirs = [Path(notes_dir_env).expanduser()]
-
-    # Create and run server
-    server = MDQueryMCPServer(
-        db_path=db_path,
-        cache_dir=cache_dir,
-        notes_dirs=notes_dirs
-    )
-
     try:
+        # Try to create simplified configuration
+        config = None
+
+        if args.config:
+            # Load from configuration file
+            logger.info(f"Loading configuration from: {args.config}")
+            config = SimplifiedConfig.load_config(args.config)
+        else:
+            # Get notes directory from args or environment
+            notes_dir = args.notes_dir
+            if not notes_dir:
+                notes_dir = os.getenv('MDQUERY_NOTES_DIR')
+
+            if notes_dir:
+                # Create simplified configuration
+                logger.info(f"Creating simplified configuration for notes directory: {notes_dir}")
+                config = SimplifiedConfig(
+                    notes_dir=notes_dir,
+                    db_path=args.db_path,
+                    cache_dir=args.cache_dir,
+                    auto_index=not args.no_auto_index
+                )
+
+                # Save configuration for future use
+                try:
+                    config.save_config()
+                    logger.info("Configuration saved for future use")
+                except Exception as e:
+                    logger.warning(f"Could not save configuration: {e}")
+            else:
+                # Fall back to legacy configuration for backward compatibility
+                logger.warning("No notes directory specified, using legacy configuration")
+
+                # Get legacy configuration from environment variables
+                db_path = args.db_path
+                if not db_path and os.getenv('MDQUERY_DB_PATH'):
+                    db_path = Path(os.getenv('MDQUERY_DB_PATH')).expanduser()
+
+                cache_dir = args.cache_dir
+                if not cache_dir and os.getenv('MDQUERY_CACHE_DIR'):
+                    cache_dir = Path(os.getenv('MDQUERY_CACHE_DIR')).expanduser()
+
+                # Handle notes directories (can be comma-separated)
+                notes_dirs = []
+                if os.getenv('MDQUERY_NOTES_DIR'):
+                    notes_dir_env = os.getenv('MDQUERY_NOTES_DIR')
+                    if ',' in notes_dir_env:
+                        notes_dirs = [Path(p.strip()).expanduser() for p in notes_dir_env.split(',')]
+                    else:
+                        notes_dirs = [Path(notes_dir_env).expanduser()]
+
+                # Create server with legacy configuration
+                server = MDQueryMCPServer(
+                    db_path=db_path,
+                    cache_dir=cache_dir,
+                    notes_dirs=notes_dirs
+                )
+
+        if config:
+            # Create server with simplified configuration
+            logger.info(f"Starting MCP server with configuration: {config}")
+            server = MDQueryMCPServer(config=config)
+
+        # Run the server
         asyncio.run(server.run())
+
+    except (ConfigurationError, MdqueryError) as e:
+        # Handle configuration errors with helpful messages
+        error_message = create_helpful_error_message(e, args.notes_dir)
+        print(error_message, file=sys.stderr)
+        sys.exit(1)
     except KeyboardInterrupt:
         logger.info("Server interrupted by user")
     except Exception as e:
         logger.error(f"Server failed: {e}")
+        if args.debug:
+            import traceback
+            traceback.print_exc()
         sys.exit(1)
 
 
