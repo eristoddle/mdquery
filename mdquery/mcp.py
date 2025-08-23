@@ -39,16 +39,18 @@ class MDQueryMCPServer:
     and retrieving schema information through the Model Context Protocol.
     """
 
-    def __init__(self, db_path: Optional[Path] = None, cache_dir: Optional[Path] = None):
+    def __init__(self, db_path: Optional[Path] = None, cache_dir: Optional[Path] = None, notes_dir: Optional[Path] = None):
         """
         Initialize MCP server with database and indexing components.
 
         Args:
             db_path: Path to SQLite database file
             cache_dir: Directory for cache files
+            notes_dir: Directory containing markdown files to auto-index
         """
         self.db_path = db_path or Path.home() / ".mdquery" / "mdquery.db"
         self.cache_dir = cache_dir or Path.home() / ".mdquery" / "cache"
+        self.notes_dir = notes_dir
 
         # Ensure directories exist
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -149,6 +151,66 @@ class MDQueryMCPServer:
             except Exception as e:
                 logger.error(f"Schema retrieval failed: {e}")
                 raise MCPServerError(f"Schema retrieval failed: {e}")
+
+        @self.server.tool()
+        async def index_multiple_directories(paths: str, recursive: bool = True, incremental: bool = True) -> str:
+            """
+            Index markdown files in multiple directories.
+
+            Args:
+                paths: Comma-separated list of directory paths to index
+                recursive: Whether to scan subdirectories
+                incremental: Whether to use incremental indexing
+
+            Returns:
+                Combined indexing statistics as JSON
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Parse paths
+                path_list = [Path(p.strip()).expanduser().resolve() for p in paths.split(',')]
+
+                # Validate all paths exist
+                for path_obj in path_list:
+                    if not path_obj.exists():
+                        raise MCPServerError(f"Directory does not exist: {path_obj}")
+                    if not path_obj.is_dir():
+                        raise MCPServerError(f"Path is not a directory: {path_obj}")
+
+                # Index all directories
+                loop = asyncio.get_event_loop()
+                all_stats = {}
+
+                for path_obj in path_list:
+                    if incremental:
+                        stats = await loop.run_in_executor(
+                            self.executor,
+                            self.indexer.incremental_index_directory,
+                            path_obj,
+                            recursive
+                        )
+                    else:
+                        stats = await loop.run_in_executor(
+                            self.executor,
+                            self.indexer.index_directory,
+                            path_obj,
+                            recursive
+                        )
+                    all_stats[str(path_obj)] = stats
+
+                result = {
+                    "paths": [str(p) for p in path_list],
+                    "recursive": recursive,
+                    "incremental": incremental,
+                    "statistics": all_stats
+                }
+
+                return json.dumps(result, indent=2, default=str)
+
+            except Exception as e:
+                logger.error(f"Multiple directory indexing failed: {e}")
+                raise MCPServerError(f"Multiple directory indexing failed: {e}")
 
         @self.server.tool()
         async def index_directory(path: str, recursive: bool = True, incremental: bool = True) -> str:
@@ -857,6 +919,15 @@ class MDQueryMCPServer:
                 cache_manager=self.cache_manager
             )
 
+            # Auto-index notes directory if specified
+            if self.notes_dir and self.notes_dir.exists():
+                logger.info(f"Auto-indexing notes directory: {self.notes_dir}")
+                try:
+                    self.indexer.incremental_index_directory(self.notes_dir, recursive=True)
+                    logger.info("Auto-indexing completed successfully")
+                except Exception as e:
+                    logger.warning(f"Auto-indexing failed: {e}")
+
             logger.info("MCP server components initialized successfully")
 
         except Exception as e:
@@ -949,10 +1020,12 @@ def main():
     """Main entry point for MCP server."""
     import sys
     import argparse
+    import os
 
     # Set up logging
+    log_level = os.getenv('MDQUERY_LOG_LEVEL', 'INFO').upper()
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, log_level, logging.INFO),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(sys.stderr)  # MCP uses stdout for protocol
@@ -964,12 +1037,17 @@ def main():
     parser.add_argument(
         "--db-path",
         type=Path,
-        help="Path to SQLite database file"
+        help="Path to SQLite database file (overrides MDQUERY_DB_PATH env var)"
     )
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        help="Directory for cache files"
+        help="Directory for cache files (overrides MDQUERY_CACHE_DIR env var)"
+    )
+    parser.add_argument(
+        "--notes-dir",
+        type=Path,
+        help="Directory containing markdown files to index (overrides MDQUERY_NOTES_DIR env var)"
     )
     parser.add_argument(
         "--debug",
@@ -982,10 +1060,24 @@ def main():
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    # Get configuration from environment variables or command line args
+    db_path = args.db_path
+    if not db_path and os.getenv('MDQUERY_DB_PATH'):
+        db_path = Path(os.getenv('MDQUERY_DB_PATH')).expanduser()
+
+    cache_dir = args.cache_dir
+    if not cache_dir and os.getenv('MDQUERY_CACHE_DIR'):
+        cache_dir = Path(os.getenv('MDQUERY_CACHE_DIR')).expanduser()
+
+    notes_dir = args.notes_dir
+    if not notes_dir and os.getenv('MDQUERY_NOTES_DIR'):
+        notes_dir = Path(os.getenv('MDQUERY_NOTES_DIR')).expanduser()
+
     # Create and run server
     server = MDQueryMCPServer(
-        db_path=args.db_path,
-        cache_dir=args.cache_dir
+        db_path=db_path,
+        cache_dir=cache_dir,
+        notes_dir=notes_dir
     )
 
     try:

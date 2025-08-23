@@ -27,6 +27,8 @@ Universal markdown querying tool with SQL-like syntax for searching and analyzin
 
 ## 🚀 Quick Start
 
+### Command Line Usage
+
 ```bash
 # Install
 pip install -r requirements.txt
@@ -38,6 +40,26 @@ mdquery index /path/to/your/notes
 # Query your notes
 mdquery query "SELECT * FROM files WHERE tags LIKE '%research%'"
 ```
+
+### AI Assistant Integration (MCP)
+
+Use mdquery with AI assistants like Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "mdquery": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_NOTES_DIR": "/Users/username/Documents/Notes"
+      }
+    }
+  }
+}
+```
+
+Then ask your AI assistant: *"Analyze my markdown notes and find patterns in my research topics"*
 
 ## 📚 Documentation
 

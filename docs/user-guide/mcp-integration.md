@@ -37,6 +37,8 @@ Add mdquery to your Claude Desktop configuration file:
 
 **Location**: `~/.claude/claude_desktop_config.json`
 
+#### Basic Configuration (Single Notes Directory)
+
 ```json
 {
   "mcpServers": {
@@ -44,13 +46,33 @@ Add mdquery to your Claude Desktop configuration file:
       "command": "python",
       "args": ["-m", "mdquery.mcp_server"],
       "env": {
-        "MDQUERY_DB_PATH": "/Users/username/notes/mdquery.db",
-        "MDQUERY_CACHE_DIR": "/Users/username/notes/.cache"
+        "MDQUERY_NOTES_DIR": "/Users/username/Documents/Notes",
+        "MDQUERY_DB_PATH": "/Users/username/.mdquery/notes.db",
+        "MDQUERY_CACHE_DIR": "/Users/username/.mdquery/cache"
       }
     }
   }
 }
 ```
+
+#### Advanced Configuration (Multiple Notes Directories)
+
+```json
+{
+  "mcpServers": {
+    "mdquery": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_DB_PATH": "/Users/username/.mdquery/all-notes.db",
+        "MDQUERY_CACHE_DIR": "/Users/username/.mdquery/cache"
+      }
+    }
+  }
+}
+```
+
+*Note: When using multiple directories, you'll use the `index_multiple_directories` tool to index them after startup.*
 
 ### Alternative Configuration Methods
 
@@ -63,7 +85,8 @@ Add mdquery to your Claude Desktop configuration file:
       "command": "uvx",
       "args": ["mdquery"],
       "env": {
-        "MDQUERY_DB_PATH": "/Users/username/notes/mdquery.db"
+        "MDQUERY_NOTES_DIR": "/Users/username/Documents/Notes",
+        "MDQUERY_DB_PATH": "/Users/username/.mdquery/notes.db"
       }
     }
   }
@@ -79,7 +102,8 @@ Add mdquery to your Claude Desktop configuration file:
       "command": "/path/to/python",
       "args": ["-m", "mdquery.mcp_server"],
       "env": {
-        "MDQUERY_DB_PATH": "/Users/username/notes/mdquery.db"
+        "MDQUERY_NOTES_DIR": "/Users/username/Documents/Notes",
+        "MDQUERY_DB_PATH": "/Users/username/.mdquery/notes.db"
       }
     }
   }
@@ -90,10 +114,28 @@ Add mdquery to your Claude Desktop configuration file:
 
 Configure mdquery behavior through environment variables:
 
-- `MDQUERY_DB_PATH`: Path to your notes database
-- `MDQUERY_CACHE_DIR`: Directory for cache files
+- `MDQUERY_NOTES_DIR`: Directory containing markdown files to auto-index on startup (optional)
+- `MDQUERY_DB_PATH`: Path to SQLite database file (default: `~/.mdquery/mdquery.db`)
+- `MDQUERY_CACHE_DIR`: Directory for cache files (default: `~/.mdquery/cache`)
 - `MDQUERY_LOG_LEVEL`: Logging level (DEBUG, INFO, WARNING, ERROR)
 - `MDQUERY_MAX_RESULTS`: Default maximum results per query
+
+#### Configuration Approaches
+
+**Approach 1: Single Notes Directory (Recommended for most users)**
+- Set `MDQUERY_NOTES_DIR` to your main notes directory
+- The server will automatically index this directory on startup
+- Use `index_directory` tool for manual re-indexing or additional directories
+
+**Approach 2: Multiple Notes Directories**
+- Don't set `MDQUERY_NOTES_DIR`
+- Use `index_multiple_directories` tool to index multiple directories after startup
+- More flexible but requires manual indexing
+
+**Approach 3: Manual Indexing Only**
+- Don't set `MDQUERY_NOTES_DIR`
+- Use `index_directory` tool to index directories as needed
+- Full control over what gets indexed and when
 
 ## Basic Usage
 
@@ -101,11 +143,37 @@ Configure mdquery behavior through environment variables:
 
 Once configured, restart Claude Desktop and start a conversation:
 
+#### Single Notes Directory (Auto-indexed)
+If you configured `MDQUERY_NOTES_DIR`, your notes are automatically indexed on startup:
+
+```
+"I'd like to analyze my markdown notes. What patterns can you find?"
+```
+
+Claude will automatically:
+1. Use the `get_schema` tool to understand your data structure
+2. Use the `query_markdown` tool to analyze patterns
+
+#### Multiple Notes Directories
+If you need to work with multiple directories:
+
+```
+"I'd like to analyze my markdown notes from multiple directories. Can you index ~/Documents/Notes, ~/Projects/Documentation, and ~/Research/Papers?"
+```
+
+Claude will:
+1. Use the `index_multiple_directories` tool to scan all directories
+2. Use the `get_schema` tool to understand your data structure
+3. Use the `query_markdown` tool to analyze patterns
+
+#### Manual Indexing
+For full control over indexing:
+
 ```
 "I'd like to analyze my markdown notes. Can you help me index them and then find patterns?"
 ```
 
-Claude will automatically:
+Claude will:
 1. Use the `index_directory` tool to scan your notes
 2. Use the `get_schema` tool to understand your data structure
 3. Use the `query_markdown` tool to analyze patterns
@@ -217,11 +285,19 @@ Understand the structure of your notes database.
 ### Indexing Tools
 
 #### `index_directory`
-Index markdown files in a directory.
+Index markdown files in a single directory.
 
 **Example Usage:**
 ```
 "Index my notes directory at ~/Documents/Notes"
+```
+
+#### `index_multiple_directories`
+Index markdown files in multiple directories at once.
+
+**Example Usage:**
+```
+"Index my notes from ~/Documents/Notes, ~/Projects/Documentation, and ~/Research/Papers"
 ```
 
 ### Analysis Tools
@@ -378,6 +454,26 @@ Focus analysis on specific subsets when working with large collections:
 3. Check file permissions: `ls -la ~/.mdquery/`
 4. Try a different database path
 
+#### Auto-indexing Not Working
+
+**Symptoms**: Notes directory not indexed automatically on startup
+
+**Solutions**:
+1. Verify `MDQUERY_NOTES_DIR` is set correctly
+2. Check directory exists and is readable: `ls -la "$MDQUERY_NOTES_DIR"`
+3. Check server logs for indexing errors
+4. Manually index: "Index my notes directory at [path]"
+
+#### Multiple Directories Not Indexing
+
+**Symptoms**: Some directories missing from index when using multiple paths
+
+**Solutions**:
+1. Use `index_multiple_directories` tool with comma-separated paths
+2. Verify all directory paths exist and are readable
+3. Check for permission issues on individual directories
+4. Index directories one at a time to isolate issues
+
 #### Query Performance Issues
 
 **Symptoms**: Slow responses or timeouts
@@ -397,6 +493,16 @@ Focus analysis on specific subsets when working with large collections:
 2. Check file extensions are supported (.md, .markdown)
 3. Verify file encoding (UTF-8 recommended)
 4. Check for file permission issues
+
+#### Environment Variables Not Working
+
+**Symptoms**: Server ignores environment variable settings
+
+**Solutions**:
+1. Verify variables are exported: `echo $MDQUERY_NOTES_DIR`
+2. Restart Claude Desktop after changing configuration
+3. Use absolute paths instead of relative paths
+4. Check for typos in variable names
 
 ### Debug Mode
 

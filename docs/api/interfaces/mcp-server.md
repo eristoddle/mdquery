@@ -32,6 +32,24 @@ Add mdquery MCP server to your AI assistant configuration:
 
 Add to `~/.claude/claude_desktop_config.json`:
 
+#### Basic Configuration (Single Notes Directory)
+```json
+{
+  "mcpServers": {
+    "mdquery": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_NOTES_DIR": "/path/to/your/notes",
+        "MDQUERY_DB_PATH": "/path/to/your/notes.db",
+        "MDQUERY_CACHE_DIR": "/path/to/cache"
+      }
+    }
+  }
+}
+```
+
+#### Advanced Configuration (Multiple Directories)
 ```json
 {
   "mcpServers": {
@@ -53,7 +71,10 @@ Add to `~/.claude/claude_desktop_config.json`:
 # Start MCP server directly
 python -m mdquery.mcp_server
 
-# Or with custom database path
+# With auto-indexing of notes directory
+MDQUERY_NOTES_DIR=~/Documents/Notes python -m mdquery.mcp_server
+
+# Or with custom database path only
 MDQUERY_DB_PATH=~/notes/mdquery.db python -m mdquery.mcp_server
 ```
 
@@ -134,7 +155,7 @@ Get database schema information to understand available tables and columns.
 
 #### `index_directory`
 
-Index markdown files in a directory.
+Index markdown files in a single directory.
 
 **Parameters:**
 - `path` (string, required): Directory path to index
@@ -165,6 +186,63 @@ Index markdown files in a directory.
     "files_skipped": 42,
     "processing_time": 2.34,
     "total_files": 45
+  }
+}
+```
+
+#### `index_multiple_directories`
+
+Index markdown files in multiple directories at once.
+
+**Parameters:**
+- `paths` (string, required): Comma-separated list of directory paths to index
+- `recursive` (boolean, optional): Scan subdirectories (default: true)
+- `incremental` (boolean, optional): Use incremental indexing (default: true)
+
+**Example:**
+```json
+{
+  "name": "index_multiple_directories",
+  "arguments": {
+    "paths": "~/Documents/Notes,~/Projects/Documentation,~/Research/Papers",
+    "recursive": true,
+    "incremental": true
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "paths": [
+    "/Users/username/Documents/Notes",
+    "/Users/username/Projects/Documentation",
+    "/Users/username/Research/Papers"
+  ],
+  "recursive": true,
+  "incremental": true,
+  "statistics": {
+    "/Users/username/Documents/Notes": {
+      "files_processed": 45,
+      "files_updated": 3,
+      "files_skipped": 42,
+      "processing_time": 2.34,
+      "total_files": 45
+    },
+    "/Users/username/Projects/Documentation": {
+      "files_processed": 23,
+      "files_updated": 1,
+      "files_skipped": 22,
+      "processing_time": 1.12,
+      "total_files": 23
+    },
+    "/Users/username/Research/Papers": {
+      "files_processed": 67,
+      "files_updated": 5,
+      "files_skipped": 62,
+      "processing_time": 3.45,
+      "total_files": 67
+    }
   }
 }
 ```
@@ -408,9 +486,34 @@ Retrieve content and metadata of a specific file.
 
 ### Environment Variables
 
+- `MDQUERY_NOTES_DIR`: Directory containing markdown files to auto-index on startup (optional)
 - `MDQUERY_DB_PATH`: Path to SQLite database file (default: `~/.mdquery/mdquery.db`)
 - `MDQUERY_CACHE_DIR`: Directory for cache files (default: `~/.mdquery/cache`)
 - `MDQUERY_LOG_LEVEL`: Logging level (default: `INFO`)
+
+### Configuration Strategies
+
+#### Single Notes Directory (Recommended)
+Set `MDQUERY_NOTES_DIR` to automatically index your main notes directory on startup:
+
+```bash
+export MDQUERY_NOTES_DIR=~/Documents/Notes
+export MDQUERY_DB_PATH=~/.mdquery/notes.db
+```
+
+#### Multiple Notes Directories
+Don't set `MDQUERY_NOTES_DIR` and use `index_multiple_directories` tool:
+
+```bash
+export MDQUERY_DB_PATH=~/.mdquery/all-notes.db
+```
+
+#### Manual Indexing Only
+Don't set `MDQUERY_NOTES_DIR` and use indexing tools as needed:
+
+```bash
+export MDQUERY_DB_PATH=~/.mdquery/manual.db
+```
 
 ### Server Initialization
 
@@ -421,7 +524,8 @@ from pathlib import Path
 # Initialize with custom paths
 server = MDQueryMCPServer(
     db_path=Path("~/notes/mdquery.db"),
-    cache_dir=Path("~/notes/.cache")
+    cache_dir=Path("~/notes/.cache"),
+    notes_dir=Path("~/Documents/Notes")  # Auto-index on startup
 )
 
 # Start server

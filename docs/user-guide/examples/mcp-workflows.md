@@ -10,6 +10,62 @@ Before running these examples, ensure you have:
 2. Claude Desktop or another MCP-compatible AI assistant configured
 3. Your notes indexed in mdquery
 
+### Configuration Examples
+
+#### Single Research Directory
+Perfect for focused research projects:
+
+```json
+{
+  "mcpServers": {
+    "mdquery": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_NOTES_DIR": "/Users/username/Research/ML-Papers",
+        "MDQUERY_DB_PATH": "/Users/username/.mdquery/research.db"
+      }
+    }
+  }
+}
+```
+
+#### Multiple Knowledge Areas
+For researchers working across multiple domains:
+
+```json
+{
+  "mcpServers": {
+    "mdquery": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_DB_PATH": "/Users/username/.mdquery/all-research.db"
+      }
+    }
+  }
+}
+```
+
+*Then use: "Index my research from ~/Research/ML-Papers, ~/Research/NLP-Notes, and ~/Research/Computer-Vision"*
+
+#### Project-Specific Setup
+For temporary or project-specific analysis:
+
+```json
+{
+  "mcpServers": {
+    "mdquery": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_DB_PATH": "/Users/username/Projects/thesis/.mdquery/thesis.db"
+      }
+    }
+  }
+}
+```
+
 ## Research Workflows
 
 ### Literature Review Management
