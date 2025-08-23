@@ -182,7 +182,7 @@ class DatabaseManager:
             CREATE TABLE tags (
                 file_id INTEGER NOT NULL,
                 tag TEXT NOT NULL,
-                source TEXT NOT NULL CHECK (source IN ('frontmatter', 'content')),
+                source TEXT NOT NULL CHECK (source IN ('frontmatter', 'content', 'unknown')),
                 PRIMARY KEY (file_id, tag),
                 FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
             )
@@ -195,7 +195,7 @@ class DatabaseManager:
                 file_id INTEGER NOT NULL,
                 link_text TEXT,
                 link_target TEXT NOT NULL,
-                link_type TEXT NOT NULL CHECK (link_type IN ('markdown', 'wikilink', 'reference')),
+                link_type TEXT NOT NULL CHECK (link_type IN ('markdown', 'wikilink', 'reference', 'autolink')),
                 is_internal BOOLEAN DEFAULT FALSE,
                 FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
             )

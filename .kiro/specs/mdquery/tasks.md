@@ -41,7 +41,7 @@
   - Write unit tests for link extraction with various link formats
   - _Requirements: 1.6, 5.1_
 
-- [ ] 7. Implement file indexing engine
+- [x] 7. Implement file indexing engine
   - Create file scanner for recursive directory traversal
   - Implement file metadata extraction (path, size, dates, hash)
   - Integrate all parsers to process markdown files completely
