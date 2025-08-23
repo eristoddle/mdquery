@@ -64,7 +64,7 @@
   - Write unit tests for query execution and result formatting
   - _Requirements: 1.1, 1.2, 6.1, 6.2, 6.5_
 
-- [ ] 10. Build CLI application interface
+- [x] 10. Build CLI application interface
   - Implement click-based command-line interface
   - Add commands for querying, indexing, and schema inspection
   - Implement multiple output formats (JSON, CSV, table, markdown)

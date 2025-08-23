@@ -1,3 +1,4 @@
 .pytest_cache
 mdquery/__pycache__
 __pycache__
+**/__pycache__/
