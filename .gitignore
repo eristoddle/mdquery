@@ -211,3 +211,5 @@ docs/build/
 
 # Task implementation summaries (temporary)
 TASK_*_IMPLEMENTATION_SUMMARY.md
+
+.mailmap
