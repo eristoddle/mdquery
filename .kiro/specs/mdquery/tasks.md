@@ -27,7 +27,7 @@
   - Write unit tests for markdown parsing with various content structures
   - _Requirements: 1.4_
 
-- [ ] 5. Build tag extraction parser
+- [x] 5. Build tag extraction parser
   - Implement tag extraction from frontmatter arrays
   - Add inline hashtag detection and parsing (#tag, #parent/child)
   - Handle Obsidian-style nested tags and tag normalization
