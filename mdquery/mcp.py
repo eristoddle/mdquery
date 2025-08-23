@@ -24,6 +24,7 @@ from .cache import CacheManager
 from .research import ResearchEngine, ResearchFilter
 from .config import SimplifiedConfig, create_helpful_error_message
 from .exceptions import ConfigurationError, MdqueryError
+from .tag_analysis import TagAnalysisEngine
 
 logger = logging.getLogger(__name__)
 
@@ -909,6 +910,121 @@ class MDQueryMCPServer:
             except Exception as e:
                 logger.error(f"File content retrieval failed: {e}")
                 raise MCPServerError(f"File content retrieval failed: {e}")
+
+        @self.server.tool()
+        async def comprehensive_tag_analysis(
+            tag_patterns: str,
+            grouping_strategy: str = "semantic",
+            include_actionable: bool = True,
+            include_theoretical: bool = True,
+            remove_fluff: bool = True,
+            min_content_quality: float = 0.3
+        ) -> str:
+            """
+            Generate comprehensive analysis of tagged content with intelligent grouping.
+
+            This tool provides advanced tag analysis with hierarchical tag support,
+            semantic content grouping, and classification of actionable vs theoretical insights.
+            It implements "fluff removal" to focus on substantive content.
+
+            Args:
+                tag_patterns: Comma-separated tag patterns to analyze (supports wildcards like "ai/*", "llm/coding")
+                grouping_strategy: How to group content ("semantic", "tag-hierarchy", "temporal")
+                include_actionable: Include practical recommendations and implementation guidance
+                include_theoretical: Include conceptual insights and research directions
+                remove_fluff: Filter out low-quality content to focus on substantive information
+                min_content_quality: Minimum content quality score (0.0 to 1.0, default 0.3)
+
+            Returns:
+                Comprehensive tag analysis results as JSON including topic groups, insights, and statistics
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Parse tag patterns
+                patterns_list = [pattern.strip() for pattern in tag_patterns.split(',') if pattern.strip()]
+
+                if not patterns_list:
+                    raise MCPServerError("At least one tag pattern must be provided")
+
+                # Perform comprehensive tag analysis in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_tag_analysis():
+                    tag_engine = TagAnalysisEngine(self.query_engine)
+                    return tag_engine.comprehensive_tag_analysis(
+                        tag_patterns=patterns_list,
+                        grouping_strategy=grouping_strategy,
+                        include_actionable=include_actionable,
+                        include_theoretical=include_theoretical,
+                        remove_fluff=remove_fluff,
+                        min_content_quality=min_content_quality
+                    )
+
+                analysis_result = await loop.run_in_executor(self.executor, run_tag_analysis)
+
+                # Convert to JSON-serializable format
+                result_data = {
+                    'topic_groups': [],
+                    'actionable_insights': [],
+                    'theoretical_insights': [],
+                    'tag_hierarchy': analysis_result.tag_hierarchy,
+                    'content_statistics': analysis_result.content_statistics,
+                    'quality_metrics': analysis_result.quality_metrics
+                }
+
+                # Convert topic groups
+                for group in analysis_result.topic_groups:
+                    group_data = {
+                        'name': group.name,
+                        'document_count': len(group.documents),
+                        'documents': [
+                            {
+                                'path': doc['path'],
+                                'title': doc.get('title'),
+                                'word_count': doc.get('word_count', 0),
+                                'tags': doc.get('tags', []),
+                                'quality_score': doc.get('quality_score', 0.5)
+                            }
+                            for doc in group.documents
+                        ],
+                        'key_themes': group.key_themes,
+                        'related_groups': group.related_groups,
+                        'tag_patterns': group.tag_patterns,
+                        'content_quality_score': group.content_quality_score
+                    }
+                    result_data['topic_groups'].append(group_data)
+
+                # Convert actionable insights
+                for insight in analysis_result.actionable_insights:
+                    insight_data = {
+                        'title': insight.title,
+                        'description': insight.description,
+                        'implementation_difficulty': insight.implementation_difficulty,
+                        'expected_impact': insight.expected_impact,
+                        'category': insight.category,
+                        'source_files': insight.source_files,
+                        'confidence_score': insight.confidence_score
+                    }
+                    result_data['actionable_insights'].append(insight_data)
+
+                # Convert theoretical insights
+                for insight in analysis_result.theoretical_insights:
+                    insight_data = {
+                        'title': insight.title,
+                        'description': insight.description,
+                        'related_concepts': insight.related_concepts,
+                        'research_directions': insight.research_directions,
+                        'source_files': insight.source_files,
+                        'confidence_score': insight.confidence_score
+                    }
+                    result_data['theoretical_insights'].append(insight_data)
+
+                return json.dumps(result_data, indent=2, default=str)
+
+            except Exception as e:
+                logger.error(f"Comprehensive tag analysis failed: {e}")
+                raise MCPServerError(f"Comprehensive tag analysis failed: {e}")
 
     async def _ensure_initialized(self) -> None:
         """
