@@ -34,7 +34,7 @@
   - Write unit tests for tag extraction from multiple sources and formats
   - _Requirements: 1.5, 5.1_
 
-- [ ] 6. Build link extraction parser
+- [x] 6. Build link extraction parser
   - Implement markdown link parsing ([text](url))
   - Add wikilink parsing ([[page]] and [[page|alias]])
   - Detect and categorize internal vs external links
