@@ -55,24 +55,54 @@ Add mdquery to your Claude Desktop configuration file:
 }
 ```
 
-#### Advanced Configuration (Multiple Notes Directories)
+#### Multiple Notes Directories (Separate Servers)
 
 ```json
 {
   "mcpServers": {
-    "mdquery": {
+    "mdquery-personal": {
       "command": "python",
       "args": ["-m", "mdquery.mcp_server"],
       "env": {
-        "MDQUERY_DB_PATH": "/Users/username/.mdquery/all-notes.db",
-        "MDQUERY_CACHE_DIR": "/Users/username/.mdquery/cache"
+        "MDQUERY_NOTES_DIR": "/Users/username/Documents/PersonalNotes",
+        "MDQUERY_DB_PATH": "/Users/username/.mdquery/personal.db"
+      }
+    },
+    "mdquery-work": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_NOTES_DIR": "/Users/username/Work/Documentation",
+        "MDQUERY_DB_PATH": "/Users/username/.mdquery/work.db"
+      }
+    },
+    "mdquery-research": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_NOTES_DIR": "/Users/username/Research/Papers",
+        "MDQUERY_DB_PATH": "/Users/username/.mdquery/research.db"
       }
     }
   }
 }
 ```
 
-*Note: When using multiple directories, you'll use the `index_multiple_directories` tool to index them after startup.*
+#### Combined Multiple Directories (Single Server)
+
+```json
+{
+  "mcpServers": {
+    "mdquery": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server", "--notes-dir", "/Users/username/Documents/Notes,/Users/username/Work/Docs,/Users/username/Research"],
+      "env": {
+        "MDQUERY_DB_PATH": "/Users/username/.mdquery/all-notes.db"
+      }
+    }
+  }
+}
+```
 
 ### Alternative Configuration Methods
 
@@ -125,14 +155,19 @@ Configure mdquery behavior through environment variables:
 **Approach 1: Single Notes Directory (Recommended for most users)**
 - Set `MDQUERY_NOTES_DIR` to your main notes directory
 - The server will automatically index this directory on startup
-- Use `index_directory` tool for manual re-indexing or additional directories
+- Simple and straightforward
 
-**Approach 2: Multiple Notes Directories**
-- Don't set `MDQUERY_NOTES_DIR`
-- Use `index_multiple_directories` tool to index multiple directories after startup
-- More flexible but requires manual indexing
+**Approach 2: Multiple Directories (Comma-separated)**
+- Set `MDQUERY_NOTES_DIR` to comma-separated list of directories
+- All directories are automatically indexed on startup
+- Example: `MDQUERY_NOTES_DIR="/path/to/notes,/path/to/docs,/path/to/research"`
 
-**Approach 3: Manual Indexing Only**
+**Approach 3: Multiple Directories (Separate Servers)**
+- Create separate MCP server entries for each directory
+- Each gets its own database and can be queried independently
+- Best for completely separate knowledge domains
+
+**Approach 4: Manual Indexing Only**
 - Don't set `MDQUERY_NOTES_DIR`
 - Use `index_directory` tool to index directories as needed
 - Full control over what gets indexed and when
@@ -154,17 +189,28 @@ Claude will automatically:
 1. Use the `get_schema` tool to understand your data structure
 2. Use the `query_markdown` tool to analyze patterns
 
-#### Multiple Notes Directories
-If you need to work with multiple directories:
+#### Multiple Notes Directories (Auto-indexed)
+If you configured multiple directories with comma-separated `MDQUERY_NOTES_DIR`:
 
 ```
-"I'd like to analyze my markdown notes from multiple directories. Can you index ~/Documents/Notes, ~/Projects/Documentation, and ~/Research/Papers?"
+"I'd like to analyze my markdown notes across all my directories. What patterns can you find?"
+```
+
+Claude will automatically:
+1. Use the `get_schema` tool to understand your data structure
+2. Use the `query_markdown` tool to analyze patterns across all indexed directories
+
+#### Multiple Separate Servers
+If you configured separate MCP servers for different domains:
+
+```
+"I'd like to compare my personal notes with my work documentation. Can you analyze both?"
 ```
 
 Claude will:
-1. Use the `index_multiple_directories` tool to scan all directories
-2. Use the `get_schema` tool to understand your data structure
-3. Use the `query_markdown` tool to analyze patterns
+1. Query both servers independently
+2. Compare patterns and themes across domains
+3. Provide insights about knowledge overlap
 
 #### Manual Indexing
 For full control over indexing:
@@ -293,12 +339,14 @@ Index markdown files in a single directory.
 ```
 
 #### `index_multiple_directories`
-Index markdown files in multiple directories at once.
+Index markdown files in multiple directories at once (for manual indexing).
 
 **Example Usage:**
 ```
-"Index my notes from ~/Documents/Notes, ~/Projects/Documentation, and ~/Research/Papers"
+"Index additional directories: ~/Temp/Notes, ~/Archive/OldNotes"
 ```
+
+*Note: For regular use, configure multiple directories in your MCP server setup instead.*
 
 ### Analysis Tools
 

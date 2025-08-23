@@ -39,18 +39,18 @@ class MDQueryMCPServer:
     and retrieving schema information through the Model Context Protocol.
     """
 
-    def __init__(self, db_path: Optional[Path] = None, cache_dir: Optional[Path] = None, notes_dir: Optional[Path] = None):
+    def __init__(self, db_path: Optional[Path] = None, cache_dir: Optional[Path] = None, notes_dirs: Optional[List[Path]] = None):
         """
         Initialize MCP server with database and indexing components.
 
         Args:
             db_path: Path to SQLite database file
             cache_dir: Directory for cache files
-            notes_dir: Directory containing markdown files to auto-index
+            notes_dirs: List of directories containing markdown files to auto-index
         """
         self.db_path = db_path or Path.home() / ".mdquery" / "mdquery.db"
         self.cache_dir = cache_dir or Path.home() / ".mdquery" / "cache"
-        self.notes_dir = notes_dir
+        self.notes_dirs = notes_dirs or []
 
         # Ensure directories exist
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -919,14 +919,18 @@ class MDQueryMCPServer:
                 cache_manager=self.cache_manager
             )
 
-            # Auto-index notes directory if specified
-            if self.notes_dir and self.notes_dir.exists():
-                logger.info(f"Auto-indexing notes directory: {self.notes_dir}")
-                try:
-                    self.indexer.incremental_index_directory(self.notes_dir, recursive=True)
-                    logger.info("Auto-indexing completed successfully")
-                except Exception as e:
-                    logger.warning(f"Auto-indexing failed: {e}")
+            # Auto-index notes directories if specified
+            if self.notes_dirs:
+                for notes_dir in self.notes_dirs:
+                    if notes_dir.exists():
+                        logger.info(f"Auto-indexing notes directory: {notes_dir}")
+                        try:
+                            self.indexer.incremental_index_directory(notes_dir, recursive=True)
+                            logger.info(f"Auto-indexing completed for: {notes_dir}")
+                        except Exception as e:
+                            logger.warning(f"Auto-indexing failed for {notes_dir}: {e}")
+                    else:
+                        logger.warning(f"Notes directory does not exist: {notes_dir}")
 
             logger.info("MCP server components initialized successfully")
 
@@ -1069,15 +1073,25 @@ def main():
     if not cache_dir and os.getenv('MDQUERY_CACHE_DIR'):
         cache_dir = Path(os.getenv('MDQUERY_CACHE_DIR')).expanduser()
 
-    notes_dir = args.notes_dir
-    if not notes_dir and os.getenv('MDQUERY_NOTES_DIR'):
-        notes_dir = Path(os.getenv('MDQUERY_NOTES_DIR')).expanduser()
+    # Handle notes directories (can be comma-separated)
+    notes_dirs = []
+    if args.notes_dir:
+        if ',' in str(args.notes_dir):
+            notes_dirs = [Path(p.strip()).expanduser() for p in str(args.notes_dir).split(',')]
+        else:
+            notes_dirs = [args.notes_dir.expanduser()]
+    elif os.getenv('MDQUERY_NOTES_DIR'):
+        notes_dir_env = os.getenv('MDQUERY_NOTES_DIR')
+        if ',' in notes_dir_env:
+            notes_dirs = [Path(p.strip()).expanduser() for p in notes_dir_env.split(',')]
+        else:
+            notes_dirs = [Path(notes_dir_env).expanduser()]
 
     # Create and run server
     server = MDQueryMCPServer(
         db_path=db_path,
         cache_dir=cache_dir,
-        notes_dir=notes_dir
+        notes_dirs=notes_dirs
     )
 
     try:

@@ -45,6 +45,7 @@ mdquery query "SELECT * FROM files WHERE tags LIKE '%research%'"
 
 Use mdquery with AI assistants like Claude Desktop:
 
+**Single Directory:**
 ```json
 {
   "mcpServers": {
@@ -53,6 +54,28 @@ Use mdquery with AI assistants like Claude Desktop:
       "args": ["-m", "mdquery.mcp_server"],
       "env": {
         "MDQUERY_NOTES_DIR": "/Users/username/Documents/Notes"
+      }
+    }
+  }
+}
+```
+
+**Multiple Directories:**
+```json
+{
+  "mcpServers": {
+    "mdquery-personal": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_NOTES_DIR": "/Users/username/PersonalNotes"
+      }
+    },
+    "mdquery-work": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_NOTES_DIR": "/Users/username/WorkDocs"
       }
     }
   }

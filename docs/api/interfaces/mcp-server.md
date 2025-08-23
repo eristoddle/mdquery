@@ -49,7 +49,7 @@ Add to `~/.claude/claude_desktop_config.json`:
 }
 ```
 
-#### Advanced Configuration (Multiple Directories)
+#### Multiple Directories (Comma-separated)
 ```json
 {
   "mcpServers": {
@@ -57,8 +57,33 @@ Add to `~/.claude/claude_desktop_config.json`:
       "command": "python",
       "args": ["-m", "mdquery.mcp_server"],
       "env": {
+        "MDQUERY_NOTES_DIR": "/path/to/notes,/path/to/docs,/path/to/research",
         "MDQUERY_DB_PATH": "/path/to/your/notes.db",
         "MDQUERY_CACHE_DIR": "/path/to/cache"
+      }
+    }
+  }
+}
+```
+
+#### Multiple Directories (Separate Servers)
+```json
+{
+  "mcpServers": {
+    "mdquery-personal": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_NOTES_DIR": "/path/to/personal/notes",
+        "MDQUERY_DB_PATH": "/path/to/personal.db"
+      }
+    },
+    "mdquery-work": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_NOTES_DIR": "/path/to/work/docs",
+        "MDQUERY_DB_PATH": "/path/to/work.db"
       }
     }
   }
@@ -501,11 +526,25 @@ export MDQUERY_NOTES_DIR=~/Documents/Notes
 export MDQUERY_DB_PATH=~/.mdquery/notes.db
 ```
 
-#### Multiple Notes Directories
-Don't set `MDQUERY_NOTES_DIR` and use `index_multiple_directories` tool:
+#### Multiple Notes Directories (Comma-separated)
+Set `MDQUERY_NOTES_DIR` to comma-separated directories:
 
 ```bash
+export MDQUERY_NOTES_DIR=~/Documents/Notes,~/Work/Docs,~/Research/Papers
 export MDQUERY_DB_PATH=~/.mdquery/all-notes.db
+```
+
+#### Multiple Notes Directories (Separate Servers)
+Use separate server configurations for independent databases:
+
+```bash
+# Server 1
+export MDQUERY_NOTES_DIR=~/Documents/Notes
+export MDQUERY_DB_PATH=~/.mdquery/personal.db
+
+# Server 2
+export MDQUERY_NOTES_DIR=~/Work/Docs
+export MDQUERY_DB_PATH=~/.mdquery/work.db
 ```
 
 #### Manual Indexing Only
@@ -521,11 +560,22 @@ export MDQUERY_DB_PATH=~/.mdquery/manual.db
 from mdquery.mcp import MDQueryMCPServer
 from pathlib import Path
 
-# Initialize with custom paths
+# Initialize with single notes directory
 server = MDQueryMCPServer(
     db_path=Path("~/notes/mdquery.db"),
     cache_dir=Path("~/notes/.cache"),
-    notes_dir=Path("~/Documents/Notes")  # Auto-index on startup
+    notes_dirs=[Path("~/Documents/Notes")]  # Auto-index on startup
+)
+
+# Initialize with multiple notes directories
+server = MDQueryMCPServer(
+    db_path=Path("~/notes/mdquery.db"),
+    cache_dir=Path("~/notes/.cache"),
+    notes_dirs=[
+        Path("~/Documents/Notes"),
+        Path("~/Work/Documentation"),
+        Path("~/Research/Papers")
+    ]
 )
 
 # Start server

@@ -30,8 +30,8 @@ Perfect for focused research projects:
 }
 ```
 
-#### Multiple Knowledge Areas
-For researchers working across multiple domains:
+#### Multiple Knowledge Areas (Combined Database)
+For researchers working across multiple domains in one database:
 
 ```json
 {
@@ -40,6 +40,7 @@ For researchers working across multiple domains:
       "command": "python",
       "args": ["-m", "mdquery.mcp_server"],
       "env": {
+        "MDQUERY_NOTES_DIR": "/Users/username/Research/ML-Papers,/Users/username/Research/NLP-Notes,/Users/username/Research/Computer-Vision",
         "MDQUERY_DB_PATH": "/Users/username/.mdquery/all-research.db"
       }
     }
@@ -47,7 +48,31 @@ For researchers working across multiple domains:
 }
 ```
 
-*Then use: "Index my research from ~/Research/ML-Papers, ~/Research/NLP-Notes, and ~/Research/Computer-Vision"*
+#### Multiple Knowledge Areas (Separate Databases)
+For completely separate research domains:
+
+```json
+{
+  "mcpServers": {
+    "mdquery-ml": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_NOTES_DIR": "/Users/username/Research/ML-Papers",
+        "MDQUERY_DB_PATH": "/Users/username/.mdquery/ml-research.db"
+      }
+    },
+    "mdquery-nlp": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_NOTES_DIR": "/Users/username/Research/NLP-Notes",
+        "MDQUERY_DB_PATH": "/Users/username/.mdquery/nlp-research.db"
+      }
+    }
+  }
+}
+```
 
 #### Project-Specific Setup
 For temporary or project-specific analysis:
