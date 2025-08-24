@@ -1026,6 +1026,145 @@ class MDQueryMCPServer:
                 logger.error(f"Comprehensive tag analysis failed: {e}")
                 raise MCPServerError(f"Comprehensive tag analysis failed: {e}")
 
+        @self.server.tool()
+        async def analyze_development_workflow(
+            focus_areas: Optional[str] = None,
+            time_range: Optional[str] = None,
+            improvement_categories: str = "process,tools,automation,quality"
+        ) -> str:
+            """
+            Analyze AI development workflow patterns and suggest improvements.
+
+            This tool provides specialized analysis for AI development workflows,
+            identifying patterns, improvement opportunities, and actionable recommendations
+            for process optimization. It builds on comprehensive tag analysis to provide
+            development-specific insights.
+
+            Args:
+                focus_areas: Comma-separated specific areas to focus on (e.g., "mcp,agents,automation")
+                time_range: Time range for analysis (e.g., "last-3-months") - currently not implemented
+                improvement_categories: Types of improvements to identify (comma-separated: process,tools,automation,quality)
+
+            Returns:
+                Workflow analysis results as JSON including patterns, opportunities, and recommendations
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Parse focus areas
+                focus_list = None
+                if focus_areas:
+                    focus_list = [area.strip() for area in focus_areas.split(',') if area.strip()]
+
+                # Parse improvement categories
+                categories_list = [cat.strip() for cat in improvement_categories.split(',') if cat.strip()]
+
+                # Perform workflow analysis in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_workflow_analysis():
+                    from .workflow_analysis import WorkflowAnalyzer
+                    workflow_analyzer = WorkflowAnalyzer(self.query_engine)
+                    return workflow_analyzer.analyze_development_workflow(
+                        focus_areas=focus_list,
+                        time_range=time_range,
+                        improvement_categories=categories_list
+                    )
+
+                analysis_result = await loop.run_in_executor(self.executor, run_workflow_analysis)
+
+                # Convert to JSON-serializable format
+                result_data = {
+                    'topic_groups': [],
+                    'actionable_insights': [],
+                    'theoretical_insights': [],
+                    'improvement_opportunities': [],
+                    'workflow_patterns': [],
+                    'development_metrics': analysis_result.development_metrics,
+                    'recommendations': analysis_result.recommendations
+                }
+
+                # Convert topic groups
+                for group in analysis_result.topic_groups:
+                    group_data = {
+                        'name': group.name,
+                        'document_count': len(group.documents),
+                        'documents': [
+                            {
+                                'path': doc['path'],
+                                'title': doc.get('title'),
+                                'word_count': doc.get('word_count', 0),
+                                'tags': doc.get('tags', []),
+                                'quality_score': doc.get('quality_score', 0.5)
+                            }
+                            for doc in group.documents
+                        ],
+                        'key_themes': group.key_themes,
+                        'related_groups': group.related_groups,
+                        'tag_patterns': group.tag_patterns,
+                        'content_quality_score': group.content_quality_score
+                    }
+                    result_data['topic_groups'].append(group_data)
+
+                # Convert actionable insights
+                for insight in analysis_result.actionable_insights:
+                    insight_data = {
+                        'title': insight.title,
+                        'description': insight.description,
+                        'implementation_difficulty': insight.implementation_difficulty,
+                        'expected_impact': insight.expected_impact,
+                        'category': insight.category,
+                        'source_files': insight.source_files,
+                        'confidence_score': insight.confidence_score
+                    }
+                    result_data['actionable_insights'].append(insight_data)
+
+                # Convert theoretical insights
+                for insight in analysis_result.theoretical_insights:
+                    insight_data = {
+                        'title': insight.title,
+                        'description': insight.description,
+                        'related_concepts': insight.related_concepts,
+                        'research_directions': insight.research_directions,
+                        'source_files': insight.source_files,
+                        'confidence_score': insight.confidence_score
+                    }
+                    result_data['theoretical_insights'].append(insight_data)
+
+                # Convert improvement opportunities
+                for opportunity in analysis_result.improvement_opportunities:
+                    opportunity_data = {
+                        'title': opportunity.title,
+                        'description': opportunity.description,
+                        'category': opportunity.category,
+                        'implementation_difficulty': opportunity.implementation_difficulty,
+                        'expected_impact': opportunity.expected_impact,
+                        'priority_score': opportunity.priority_score,
+                        'source_files': opportunity.source_files,
+                        'related_patterns': opportunity.related_patterns,
+                        'suggested_actions': opportunity.suggested_actions
+                    }
+                    result_data['improvement_opportunities'].append(opportunity_data)
+
+                # Convert workflow patterns
+                for pattern in analysis_result.workflow_patterns:
+                    pattern_data = {
+                        'pattern_name': pattern.pattern_name,
+                        'description': pattern.description,
+                        'frequency': pattern.frequency,
+                        'files_involved': pattern.files_involved,
+                        'tags_involved': pattern.tags_involved,
+                        'pattern_type': pattern.pattern_type,
+                        'confidence_score': pattern.confidence_score
+                    }
+                    result_data['workflow_patterns'].append(pattern_data)
+
+                return json.dumps(result_data, indent=2, default=str)
+
+            except Exception as e:
+                logger.error(f"Development workflow analysis failed: {e}")
+                raise MCPServerError(f"Development workflow analysis failed: {e}")
+
     async def _ensure_initialized(self) -> None:
         """
         Ensure all components are initialized with retry logic.
