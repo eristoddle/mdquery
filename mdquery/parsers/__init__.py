@@ -9,10 +9,12 @@ from .frontmatter import FrontmatterParser
 from .markdown import MarkdownParser
 from .tags import TagParser
 from .links import LinkParser
+from .obsidian import ObsidianParser
 
 __all__ = [
     "FrontmatterParser",
     "MarkdownParser",
     "TagParser",
     "LinkParser",
+    "ObsidianParser",
 ]

@@ -29,7 +29,7 @@ class DatabaseManager:
     """
 
     # Current schema version
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, db_path: Optional[Path] = None):
         """
@@ -268,11 +268,108 @@ class DatabaseManager:
             )
         """)
 
+        # Obsidian-specific tables (Schema version 2+)
+        self._create_obsidian_schema(conn)
+
         # Create indexes for performance
         self._create_indexes(conn)
 
         # Create views for convenient querying
         self._create_views(conn)
+
+    def _create_obsidian_schema(self, conn: sqlite3.Connection) -> None:
+        """Create Obsidian-specific database tables."""
+
+        # Obsidian wikilinks table - enhanced link tracking
+        conn.execute("""
+            CREATE TABLE obsidian_links (
+                id INTEGER PRIMARY KEY,
+                file_id INTEGER NOT NULL,
+                link_text TEXT,
+                link_target TEXT NOT NULL,
+                obsidian_type TEXT NOT NULL CHECK (obsidian_type IN ('page', 'section', 'block')),
+                section TEXT,
+                block_id TEXT,
+                has_alias BOOLEAN DEFAULT FALSE,
+                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Obsidian embeds table
+        conn.execute("""
+            CREATE TABLE obsidian_embeds (
+                id INTEGER PRIMARY KEY,
+                file_id INTEGER NOT NULL,
+                embed_target TEXT NOT NULL,
+                embed_alias TEXT,
+                embed_type TEXT NOT NULL DEFAULT 'page',
+                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Obsidian templates table
+        conn.execute("""
+            CREATE TABLE obsidian_templates (
+                id INTEGER PRIMARY KEY,
+                file_id INTEGER NOT NULL,
+                template_name TEXT NOT NULL,
+                template_arg TEXT,
+                start_pos INTEGER NOT NULL,
+                end_pos INTEGER NOT NULL,
+                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Obsidian callouts table
+        conn.execute("""
+            CREATE TABLE obsidian_callouts (
+                id INTEGER PRIMARY KEY,
+                file_id INTEGER NOT NULL,
+                callout_type TEXT NOT NULL,
+                callout_title TEXT,
+                line_number INTEGER NOT NULL,
+                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Obsidian block references table
+        conn.execute("""
+            CREATE TABLE obsidian_blocks (
+                id INTEGER PRIMARY KEY,
+                file_id INTEGER NOT NULL,
+                block_id TEXT NOT NULL,
+                line_number INTEGER NOT NULL,
+                UNIQUE(file_id, block_id),
+                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Obsidian dataview queries table
+        conn.execute("""
+            CREATE TABLE obsidian_dataview (
+                id INTEGER PRIMARY KEY,
+                file_id INTEGER NOT NULL,
+                query_content TEXT NOT NULL,
+                line_number INTEGER NOT NULL,
+                start_pos INTEGER NOT NULL,
+                end_pos INTEGER NOT NULL,
+                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Graph connections table for relationship analysis
+        conn.execute("""
+            CREATE TABLE obsidian_graph (
+                id INTEGER PRIMARY KEY,
+                source_file_id INTEGER NOT NULL,
+                target_file_id INTEGER,
+                target_name TEXT NOT NULL,
+                connection_type TEXT NOT NULL CHECK (connection_type IN ('wikilink', 'embed', 'backlink')),
+                connection_strength INTEGER DEFAULT 1,
+                FOREIGN KEY (source_file_id) REFERENCES files(id) ON DELETE CASCADE,
+                FOREIGN KEY (target_file_id) REFERENCES files(id) ON DELETE SET NULL
+            )
+        """)
 
     def _create_indexes(self, conn: sqlite3.Connection) -> None:
         """Create database indexes for query performance."""
@@ -287,7 +384,16 @@ class DatabaseManager:
             "CREATE INDEX idx_tags_source ON tags(source)",
             "CREATE INDEX idx_links_target ON links(link_target)",
             "CREATE INDEX idx_links_type ON links(link_type)",
-            "CREATE INDEX idx_links_internal ON links(is_internal)"
+            "CREATE INDEX idx_links_internal ON links(is_internal)",
+            # Obsidian-specific indexes
+            "CREATE INDEX idx_obsidian_links_target ON obsidian_links(link_target)",
+            "CREATE INDEX idx_obsidian_links_type ON obsidian_links(obsidian_type)",
+            "CREATE INDEX idx_obsidian_embeds_target ON obsidian_embeds(embed_target)",
+            "CREATE INDEX idx_obsidian_templates_name ON obsidian_templates(template_name)",
+            "CREATE INDEX idx_obsidian_callouts_type ON obsidian_callouts(callout_type)",
+            "CREATE INDEX idx_obsidian_blocks_id ON obsidian_blocks(block_id)",
+            "CREATE INDEX idx_obsidian_graph_target ON obsidian_graph(target_name)",
+            "CREATE INDEX idx_obsidian_graph_type ON obsidian_graph(connection_type)"
         ]
 
         for index_sql in indexes:
@@ -353,9 +459,9 @@ class DatabaseManager:
             from_version: Current schema version
         """
         migrations = {
+            2: self._migrate_to_version_2,
             # Future migrations will be added here
             # Example:
-            # 2: self._migrate_to_version_2,
             # 3: self._migrate_to_version_3,
         }
 
@@ -366,6 +472,32 @@ class DatabaseManager:
                 self._set_schema_version(conn, version)
             else:
                 raise DatabaseError(f"No migration available for version {version}")
+
+    def _migrate_to_version_2(self, conn: sqlite3.Connection) -> None:
+        """Migrate database to version 2 - Add Obsidian support."""
+        logger.info("Adding Obsidian-specific tables and indexes")
+
+        # Create Obsidian-specific tables
+        self._create_obsidian_schema(conn)
+
+        # Add new indexes for Obsidian tables
+        obsidian_indexes = [
+            "CREATE INDEX idx_obsidian_links_target ON obsidian_links(link_target)",
+            "CREATE INDEX idx_obsidian_links_type ON obsidian_links(obsidian_type)",
+            "CREATE INDEX idx_obsidian_embeds_target ON obsidian_embeds(embed_target)",
+            "CREATE INDEX idx_obsidian_templates_name ON obsidian_templates(template_name)",
+            "CREATE INDEX idx_obsidian_callouts_type ON obsidian_callouts(callout_type)",
+            "CREATE INDEX idx_obsidian_blocks_id ON obsidian_blocks(block_id)",
+            "CREATE INDEX idx_obsidian_graph_target ON obsidian_graph(target_name)",
+            "CREATE INDEX idx_obsidian_graph_type ON obsidian_graph(connection_type)"
+        ]
+
+        for index_sql in obsidian_indexes:
+            try:
+                conn.execute(index_sql)
+            except sqlite3.OperationalError as e:
+                if "already exists" not in str(e):
+                    raise
 
     def get_schema_info(self) -> Dict[str, Any]:
         """

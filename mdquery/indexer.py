@@ -16,6 +16,7 @@ from .parsers.frontmatter import FrontmatterParser
 from .parsers.markdown import MarkdownParser
 from .parsers.tags import TagParser
 from .parsers.links import LinkParser
+from .parsers.obsidian import ObsidianParser
 from .cache import CacheManager
 from .exceptions import (
     IndexingError, FileAccessError, FileCorruptedError, DirectoryNotFoundError,
@@ -45,6 +46,7 @@ class Indexer:
         self.markdown_parser = MarkdownParser()
         self.tag_parser = TagParser()
         self.link_parser = LinkParser()
+        self.obsidian_parser = ObsidianParser()
 
         # Supported file extensions
         self.markdown_extensions = {'.md', '.markdown', '.mdown', '.mkd', '.mkdn', '.mdx'}
@@ -172,7 +174,7 @@ class Indexer:
                 raise FileCorruptedError(f"Cannot decode file content: {e}", file_path=file_path) from e
 
             try:
-                parsed_content = self._parse_content(content)
+                parsed_content = self._parse_content(content, file_path)
             except Exception as e:
                 raise ParsingError(f"Failed to parse file content: {e}", file_path=file_path) from e
 
@@ -457,15 +459,16 @@ class Indexer:
             file_path=file_path
         ) from last_error
 
-    def _parse_content(self, content: str) -> ParsedContent:
+    def _parse_content(self, content: str, file_path: Optional[Path] = None) -> ParsedContent:
         """
-        Parse markdown content using all parsers.
+        Parse markdown content using all parsers including Obsidian-specific features.
 
         Args:
             content: Raw markdown content
+            file_path: Optional file path for Obsidian context
 
         Returns:
-            ParsedContent object with all parsed data
+            ParsedContent object with all parsed data including Obsidian features
         """
         # Parse frontmatter first
         frontmatter = self.frontmatter_parser.parse(content)
@@ -473,14 +476,22 @@ class Indexer:
         # Get content without frontmatter
         content_without_fm = self.frontmatter_parser.get_content_without_frontmatter(content)
 
+        # Sanitize content for parsing (handle templates, etc.)
+        sanitized_content = self.obsidian_parser.sanitize_content_for_parsing(content_without_fm)
+
         # Parse markdown content
-        parsed_md = self.markdown_parser.parse(content_without_fm)
+        parsed_md = self.markdown_parser.parse(sanitized_content)
 
-        # Extract tags from both frontmatter and content
+        # Extract tags from both frontmatter and content (enhanced for Obsidian)
         all_tags = self.tag_parser.parse_all_tags(frontmatter, content_without_fm)
+        obsidian_tags = self.obsidian_parser.parse_obsidian_tags(content_without_fm)
 
-        # Extract links
-        links = self.link_parser.parse(content_without_fm)
+        # Extract links (both standard and Obsidian)
+        standard_links = self.link_parser.parse(content_without_fm)
+        enhanced_links = self.obsidian_parser.extract_enhanced_links(content_without_fm)
+
+        # Parse Obsidian-specific features
+        obsidian_features = self.obsidian_parser.parse_obsidian_features(content_without_fm, file_path)
 
         # Get title from frontmatter or first heading
         title = None
@@ -502,6 +513,10 @@ class Indexer:
         all_tag_list = []
         all_tag_list.extend(all_tags.get('frontmatter', []))
         all_tag_list.extend(all_tags.get('content', []))
+        all_tag_list.extend(obsidian_tags)
+
+        # Combine links from all sources
+        all_links = standard_links + enhanced_links
 
         return ParsedContent(
             frontmatter=frontmatter,
@@ -509,7 +524,8 @@ class Indexer:
             title=title,
             headings=[h.text for h in parsed_md.headings],
             tags=list(set(all_tag_list)),  # Remove duplicates
-            links=links
+            links=all_links,
+            obsidian_features=obsidian_features
         )
 
     def _store_file_data(self, file_metadata: FileMetadata, parsed_content: ParsedContent) -> None:
@@ -558,6 +574,9 @@ class Indexer:
             conn.execute("DELETE FROM tags WHERE file_id = ?", (file_id,))
             conn.execute("DELETE FROM links WHERE file_id = ?", (file_id,))
             conn.execute("DELETE FROM content_fts WHERE file_id = ?", (file_id,))
+
+            # Clear Obsidian-specific data
+            self._clear_obsidian_data(conn, file_id)
 
             # Insert frontmatter data
             for key, value_data in parsed_content.frontmatter.items():
@@ -618,6 +637,9 @@ class Indexer:
                     link['link_type'],
                     link['is_internal']
                 ))
+
+            # Insert Obsidian-specific data
+            self._store_obsidian_data(conn, file_id, parsed_content.obsidian_features)
 
             # Insert FTS5 content
             headings_text = ' '.join(parsed_content.headings) if parsed_content.headings else ''
@@ -863,4 +885,154 @@ class Indexer:
         except Exception as e:
             logger.error(f"Error during directory sync: {e}")
             sync_stats['errors'] += 1
-            return sync_stats
+            return sync_stats    def
+_clear_obsidian_data(self, conn, file_id: int) -> None:
+        """Clear all Obsidian-specific data for a file."""
+        obsidian_tables = [
+            'obsidian_links',
+            'obsidian_embeds',
+            'obsidian_templates',
+            'obsidian_callouts',
+            'obsidian_blocks',
+            'obsidian_dataview',
+            'obsidian_graph'
+        ]
+
+        for table in obsidian_tables:
+            try:
+                conn.execute(f"DELETE FROM {table} WHERE file_id = ?", (file_id,))
+            except Exception as e:
+                # Table might not exist in older schema versions
+                logger.debug(f"Could not clear {table}: {e}")
+
+    def _store_obsidian_data(self, conn, file_id: int, obsidian_features: Dict[str, Any]) -> None:
+        """Store Obsidian-specific features in the database."""
+        if not obsidian_features:
+            return
+
+        try:
+            # Store wikilinks
+            wikilinks = obsidian_features.get('wikilinks', [])
+            for link in wikilinks:
+                conn.execute("""
+                    INSERT INTO obsidian_links
+                    (file_id, link_text, link_target, obsidian_type, section, block_id, has_alias)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    file_id,
+                    link.get('link_text'),
+                    link.get('link_target'),
+                    link.get('obsidian_type', 'page'),
+                    link.get('section'),
+                    link.get('block_id'),
+                    link.get('has_alias', False)
+                ))
+
+            # Store embeds
+            embeds = obsidian_features.get('embeds', [])
+            for embed in embeds:
+                conn.execute("""
+                    INSERT INTO obsidian_embeds
+                    (file_id, embed_target, embed_alias, embed_type)
+                    VALUES (?, ?, ?, ?)
+                """, (
+                    file_id,
+                    embed.get('embed_target'),
+                    embed.get('embed_alias'),
+                    embed.get('embed_type', 'page')
+                ))
+
+            # Store templates
+            templates = obsidian_features.get('templates', [])
+            for template in templates:
+                conn.execute("""
+                    INSERT INTO obsidian_templates
+                    (file_id, template_name, template_arg, start_pos, end_pos)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    file_id,
+                    template.get('template_name'),
+                    template.get('template_arg'),
+                    template.get('start_pos', 0),
+                    template.get('end_pos', 0)
+                ))
+
+            # Store callouts
+            callouts = obsidian_features.get('callouts', [])
+            for callout in callouts:
+                conn.execute("""
+                    INSERT INTO obsidian_callouts
+                    (file_id, callout_type, callout_title, line_number)
+                    VALUES (?, ?, ?, ?)
+                """, (
+                    file_id,
+                    callout.get('callout_type'),
+                    callout.get('callout_title'),
+                    callout.get('line_number', 0)
+                ))
+
+            # Store block references
+            block_refs = obsidian_features.get('block_references', [])
+            for block_ref in block_refs:
+                conn.execute("""
+                    INSERT INTO obsidian_blocks
+                    (file_id, block_id, line_number)
+                    VALUES (?, ?, ?)
+                """, (
+                    file_id,
+                    block_ref.get('block_id'),
+                    block_ref.get('line_number', 0)
+                ))
+
+            # Store dataview queries
+            dataview_queries = obsidian_features.get('dataview_queries', [])
+            for query in dataview_queries:
+                conn.execute("""
+                    INSERT INTO obsidian_dataview
+                    (file_id, query_content, line_number, start_pos, end_pos)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    file_id,
+                    query.get('query_content'),
+                    query.get('line_number', 0),
+                    query.get('start_pos', 0),
+                    query.get('end_pos', 0)
+                ))
+
+            # Store graph connections
+            graph_connections = obsidian_features.get('graph_connections', {})
+            if isinstance(graph_connections, dict):
+                outgoing_links = graph_connections.get('outgoing_links', [])
+                connection_strength = graph_connections.get('connection_strength', {})
+
+                for target in outgoing_links:
+                    strength = connection_strength.get(target, 1)
+                    conn.execute("""
+                        INSERT INTO obsidian_graph
+                        (source_file_id, target_name, connection_type, connection_strength)
+                        VALUES (?, ?, ?, ?)
+                    """, (
+                        file_id,
+                        target,
+                        'wikilink',
+                        strength
+                    ))
+
+                # Store embeds as stronger connections
+                embeds_list = graph_connections.get('embeds', [])
+                for target in embeds_list:
+                    strength = connection_strength.get(target, 2)
+                    conn.execute("""
+                        INSERT INTO obsidian_graph
+                        (source_file_id, target_name, connection_type, connection_strength)
+                        VALUES (?, ?, ?, ?)
+                    """, (
+                        file_id,
+                        target,
+                        'embed',
+                        strength
+                    ))
+
+        except Exception as e:
+            logger.warning(f"Error storing Obsidian data: {e}")
+            # Don't fail the entire indexing process for Obsidian features
