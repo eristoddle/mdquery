@@ -25,6 +25,7 @@ from .research import ResearchEngine, ResearchFilter
 from .config import SimplifiedConfig, create_helpful_error_message
 from .exceptions import ConfigurationError, MdqueryError
 from .tag_analysis import TagAnalysisEngine
+from .query_guidance import QueryGuidanceEngine
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ class MDQueryMCPServer:
         self.query_engine: Optional[QueryEngine] = None
         self.indexer: Optional[Indexer] = None
         self.cache_manager: Optional[CacheManager] = None
+        self.query_guidance_engine: Optional[QueryGuidanceEngine] = None
 
         # Thread pool for blocking operations
         self.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mdquery-mcp")
@@ -1164,6 +1166,254 @@ class MDQueryMCPServer:
             except Exception as e:
                 logger.error(f"Development workflow analysis failed: {e}")
                 raise MCPServerError(f"Development workflow analysis failed: {e}")
+
+        @self.server.tool()
+        async def get_query_guidance(
+            analysis_type: str,
+            content_description: str = ""
+        ) -> str:
+            """
+            Provide query syntax guidance and examples for specific analysis needs.
+
+            This tool provides comprehensive query assistance including syntax documentation,
+            templates for common analysis patterns, optimization suggestions, and examples
+            library for tag-based and workflow analysis queries.
+
+            Args:
+                analysis_type: Type of analysis needed (e.g., "tag-analysis", "workflow-review",
+                             "content-analysis", "research", "performance")
+                content_description: Optional description of the content to analyze for more
+                                   specific guidance
+
+            Returns:
+                Query guidance as JSON including suggested queries, optimization tips,
+                common patterns, syntax reference, and relevant examples
+            """
+            try:
+                # Initialize query guidance engine if not already done
+                if self.query_guidance_engine is None:
+                    self.query_guidance_engine = QueryGuidanceEngine()
+
+                # Get guidance in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_query_guidance():
+                    return self.query_guidance_engine.get_query_guidance(
+                        analysis_type=analysis_type,
+                        content_description=content_description
+                    )
+
+                guidance = await loop.run_in_executor(self.executor, run_query_guidance)
+
+                # Convert to JSON-serializable format
+                result_data = {
+                    'analysis_type': analysis_type,
+                    'content_description': content_description,
+                    'suggested_queries': [],
+                    'optimization_tips': guidance.optimization_tips,
+                    'common_patterns': guidance.common_patterns,
+                    'syntax_reference': guidance.syntax_reference,
+                    'examples': guidance.examples
+                }
+
+                # Convert suggested queries
+                for template in guidance.suggested_queries:
+                    template_data = {
+                        'name': template.name,
+                        'description': template.description,
+                        'category': template.category,
+                        'sql_template': template.sql_template,
+                        'parameters': [
+                            {
+                                'name': param.name,
+                                'type': param.type,
+                                'description': param.description,
+                                'default': param.default,
+                                'required': param.required,
+                                'examples': param.examples
+                            }
+                            for param in template.parameters
+                        ],
+                        'example_usage': template.example_usage,
+                        'complexity': template.complexity,
+                        'performance_notes': template.performance_notes
+                    }
+                    result_data['suggested_queries'].append(template_data)
+
+                return json.dumps(result_data, indent=2, default=str)
+
+            except Exception as e:
+                logger.error(f"Query guidance failed: {e}")
+                raise MCPServerError(f"Query guidance failed: {e}")
+
+        @self.server.tool()
+        async def get_query_templates(
+            category: Optional[str] = None,
+            complexity: Optional[str] = None
+        ) -> str:
+            """
+            Get query templates filtered by category and complexity.
+
+            This tool provides access to the library of pre-built query templates
+            for common analysis patterns, filtered by category and complexity level.
+
+            Args:
+                category: Filter by category ('tag-analysis', 'workflow', 'content',
+                         'research', 'performance') - optional
+                complexity: Filter by complexity ('basic', 'intermediate', 'advanced') - optional
+
+            Returns:
+                List of matching query templates as JSON
+            """
+            try:
+                # Initialize query guidance engine if not already done
+                if self.query_guidance_engine is None:
+                    self.query_guidance_engine = QueryGuidanceEngine()
+
+                # Get templates in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_get_templates():
+                    return self.query_guidance_engine.get_query_templates(
+                        category=category,
+                        complexity=complexity
+                    )
+
+                templates = await loop.run_in_executor(self.executor, run_get_templates)
+
+                # Convert to JSON-serializable format
+                result_data = {
+                    'filter_category': category,
+                    'filter_complexity': complexity,
+                    'template_count': len(templates),
+                    'templates': []
+                }
+
+                for template in templates:
+                    template_data = {
+                        'name': template.name,
+                        'description': template.description,
+                        'category': template.category,
+                        'sql_template': template.sql_template,
+                        'parameters': [
+                            {
+                                'name': param.name,
+                                'type': param.type,
+                                'description': param.description,
+                                'default': param.default,
+                                'required': param.required,
+                                'examples': param.examples
+                            }
+                            for param in template.parameters
+                        ],
+                        'example_usage': template.example_usage,
+                        'complexity': template.complexity,
+                        'performance_notes': template.performance_notes
+                    }
+                    result_data['templates'].append(template_data)
+
+                return json.dumps(result_data, indent=2, default=str)
+
+            except Exception as e:
+                logger.error(f"Query templates retrieval failed: {e}")
+                raise MCPServerError(f"Query templates retrieval failed: {e}")
+
+        @self.server.tool()
+        async def get_query_optimization_suggestions(query: str) -> str:
+            """
+            Analyze a query and provide optimization suggestions.
+
+            This tool analyzes SQL queries for common performance issues and provides
+            specific suggestions for optimization, including before/after examples.
+
+            Args:
+                query: SQL query to analyze for optimization opportunities
+
+            Returns:
+                List of optimization suggestions as JSON with examples and performance impact
+            """
+            try:
+                # Initialize query guidance engine if not already done
+                if self.query_guidance_engine is None:
+                    self.query_guidance_engine = QueryGuidanceEngine()
+
+                # Get optimization suggestions in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_optimization_analysis():
+                    return self.query_guidance_engine.get_optimization_suggestions(query)
+
+                suggestions = await loop.run_in_executor(self.executor, run_optimization_analysis)
+
+                # Convert to JSON-serializable format
+                result_data = {
+                    'analyzed_query': query,
+                    'suggestion_count': len(suggestions),
+                    'suggestions': []
+                }
+
+                for suggestion in suggestions:
+                    suggestion_data = {
+                        'issue': suggestion.issue,
+                        'suggestion': suggestion.suggestion,
+                        'example_before': suggestion.example_before,
+                        'example_after': suggestion.example_after,
+                        'performance_impact': suggestion.performance_impact
+                    }
+                    result_data['suggestions'].append(suggestion_data)
+
+                # Add general optimization tips if no specific suggestions found
+                if not suggestions:
+                    result_data['general_tips'] = [
+                        "Query appears to be well-optimized",
+                        "Consider adding LIMIT clause if expecting large result sets",
+                        "Use content_fts table for text search instead of LIKE on content",
+                        "Ensure WHERE conditions are as specific as possible"
+                    ]
+
+                return json.dumps(result_data, indent=2, default=str)
+
+            except Exception as e:
+                logger.error(f"Query optimization analysis failed: {e}")
+                raise MCPServerError(f"Query optimization analysis failed: {e}")
+
+        @self.server.tool()
+        async def get_query_syntax_reference() -> str:
+            """
+            Get comprehensive query syntax reference documentation.
+
+            This tool provides complete syntax reference including table schemas,
+            operators, functions, FTS syntax, and common patterns for mdquery.
+
+            Returns:
+                Complete syntax reference documentation as JSON
+            """
+            try:
+                # Initialize query guidance engine if not already done
+                if self.query_guidance_engine is None:
+                    self.query_guidance_engine = QueryGuidanceEngine()
+
+                # Get syntax reference
+                syntax_ref = self.query_guidance_engine.syntax_reference
+                common_patterns = self.query_guidance_engine.common_patterns
+
+                result_data = {
+                    'syntax_reference': syntax_ref,
+                    'common_patterns': common_patterns,
+                    'quick_reference': {
+                        'basic_query': "SELECT columns FROM table WHERE conditions ORDER BY column LIMIT number",
+                        'tag_search': "JOIN tags t ON f.id = t.file_id WHERE t.tag = 'your_tag'",
+                        'text_search': "JOIN content_fts fts ON f.id = fts.file_id WHERE content_fts MATCH 'search_terms'",
+                        'date_filter': "WHERE modified_date > date('now', '-30 days')",
+                        'aggregation': "SELECT tag, COUNT(*) FROM tags GROUP BY tag ORDER BY COUNT(*) DESC"
+                    }
+                }
+
+                return json.dumps(result_data, indent=2, default=str)
+
+            except Exception as e:
+                logger.error(f"Syntax reference retrieval failed: {e}")
+                raise MCPServerError(f"Syntax reference retrieval failed: {e}")
 
     async def _ensure_initialized(self) -> None:
         """
