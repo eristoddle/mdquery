@@ -12,6 +12,10 @@ The Model Context Protocol (MCP) is a standard for connecting AI assistants to e
 - **Intelligent Analysis**: AI can perform complex analysis and generate insights
 - **Automated Workflows**: AI can chain multiple operations together
 - **Context Awareness**: AI understands your note structure and relationships
+- **Multi-Assistant Support**: Works seamlessly with Claude, GPT, and other AI assistants
+- **Automatic Optimization**: Built-in performance optimization and query enhancement
+- **Error Recovery**: Graceful failure handling with automatic recovery mechanisms
+- **Concurrent Access**: Multiple AI assistants can access your notes simultaneously
 
 ## Setup and Configuration
 
@@ -19,7 +23,8 @@ The Model Context Protocol (MCP) is a standard for connecting AI assistants to e
 
 - Python 3.8 or higher
 - mdquery installed with MCP support
-- MCP-compatible AI assistant (Claude Desktop, etc.)
+- MCP-compatible AI assistant (Claude Desktop, ChatGPT with MCP, etc.)
+- Minimum 100MB available disk space for database and cache
 
 ### Installation
 
@@ -37,7 +42,25 @@ Add mdquery to your Claude Desktop configuration file:
 
 **Location**: `~/.claude/claude_desktop_config.json`
 
-#### Basic Configuration (Single Notes Directory)
+#### Simplified Configuration (Recommended)
+
+**For most users - just specify your notes directory:**
+
+```json
+{
+  "mcpServers": {
+    "mdquery": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_NOTES_DIR": "/Users/username/Documents/Notes"
+      }
+    }
+  }
+}
+```
+
+**Advanced Configuration (Full Control):**
 
 ```json
 {
@@ -48,7 +71,10 @@ Add mdquery to your Claude Desktop configuration file:
       "env": {
         "MDQUERY_NOTES_DIR": "/Users/username/Documents/Notes",
         "MDQUERY_DB_PATH": "/Users/username/.mdquery/notes.db",
-        "MDQUERY_CACHE_DIR": "/Users/username/.mdquery/cache"
+        "MDQUERY_CACHE_DIR": "/Users/username/.mdquery/cache",
+        "MDQUERY_PERFORMANCE_MODE": "high",
+        "MDQUERY_AUTO_OPTIMIZE": "true",
+        "MDQUERY_CONCURRENT_QUERIES": "5"
       }
     }
   }
@@ -144,11 +170,26 @@ Add mdquery to your Claude Desktop configuration file:
 
 Configure mdquery behavior through environment variables:
 
-- `MDQUERY_NOTES_DIR`: Directory containing markdown files to auto-index on startup (optional)
+**Essential Variables:**
+- `MDQUERY_NOTES_DIR`: Directory containing markdown files to auto-index on startup
 - `MDQUERY_DB_PATH`: Path to SQLite database file (default: `~/.mdquery/mdquery.db`)
 - `MDQUERY_CACHE_DIR`: Directory for cache files (default: `~/.mdquery/cache`)
-- `MDQUERY_LOG_LEVEL`: Logging level (DEBUG, INFO, WARNING, ERROR)
-- `MDQUERY_MAX_RESULTS`: Default maximum results per query
+
+**Performance Variables:**
+- `MDQUERY_PERFORMANCE_MODE`: Performance level (`low`, `medium`, `high`) - default: `medium`
+- `MDQUERY_AUTO_OPTIMIZE`: Enable automatic query optimization (`true`/`false`) - default: `true`
+- `MDQUERY_CONCURRENT_QUERIES`: Max concurrent queries (1-10) - default: `3`
+- `MDQUERY_CACHE_TTL`: Cache time-to-live in minutes - default: `60`
+- `MDQUERY_LAZY_LOADING`: Enable lazy loading for large datasets (`true`/`false`) - default: `true`
+
+**Compatibility Variables:**
+- `MDQUERY_ASSISTANT_TYPE`: Hint for response formatting (`claude`, `gpt`, `generic`) - auto-detected
+- `MDQUERY_RESPONSE_FORMAT`: Default response format (`json`, `markdown`, `adaptive`) - default: `adaptive`
+
+**Debug Variables:**
+- `MDQUERY_LOG_LEVEL`: Logging level (DEBUG, INFO, WARNING, ERROR) - default: `INFO`
+- `MDQUERY_MAX_RESULTS`: Default maximum results per query - default: `100`
+- `MDQUERY_ENABLE_METRICS`: Enable performance metrics collection (`true`/`false`) - default: `false`
 
 #### Configuration Approaches
 
@@ -313,11 +354,31 @@ Claude will:
 ### Core Query Tools
 
 #### `query_markdown`
-Execute SQL queries against your markdown database.
+Execute SQL queries against your markdown database with automatic optimization.
+
+**Features:**
+- Automatic query optimization and performance enhancement
+- Intelligent result caching for faster repeated queries
+- Adaptive response formatting based on AI assistant type
+- Support for concurrent queries from multiple assistants
 
 **Example Usage:**
 ```
 "Query my notes to find all files tagged with 'research' that were modified in the last month"
+```
+
+#### `comprehensive_tag_analysis`
+**NEW**: Generate comprehensive analysis of tagged content with intelligent grouping.
+
+**Features:**
+- Semantic grouping of related tags and content
+- Actionable insights and theoretical analysis
+- Content quality filtering and optimization suggestions
+- Performance-optimized for large tag datasets
+
+**Example Usage:**
+```
+"Perform a comprehensive analysis of my AI and machine learning tags to find patterns and insights"
 ```
 
 #### `get_schema`
@@ -348,14 +409,34 @@ Index markdown files in multiple directories at once (for manual indexing).
 
 *Note: For regular use, configure multiple directories in your MCP server setup instead.*
 
-### Analysis Tools
+### Performance and Monitoring Tools
 
-#### `analyze_seo`
-Perform SEO analysis on your content.
+#### `get_performance_stats`
+**NEW**: Get real-time performance statistics and monitoring data.
+
+**Features:**
+- Query execution time analysis
+- Cache hit rate monitoring
+- Memory usage tracking
+- Performance optimization suggestions
 
 **Example Usage:**
 ```
-"Analyze the SEO quality of my blog posts and suggest improvements"
+"Show me the performance statistics for my mdquery server and suggest optimizations"
+```
+
+#### `optimize_query_performance`
+**NEW**: Automatically optimize query performance and suggest improvements.
+
+**Features:**
+- Automatic query rewriting for better performance
+- FTS (Full-Text Search) conversion for text searches
+- Index usage optimization
+- Performance impact analysis
+
+**Example Usage:**
+```
+"Optimize the performance of my content search queries and show me the improvements"
 ```
 
 #### `analyze_content_structure`
@@ -400,7 +481,119 @@ Extract quotes and references with source attribution.
 "Extract all quotes from my research papers with proper attribution"
 ```
 
-## Best Practices
+## Enhanced Features
+
+### Automatic Error Recovery
+
+mdquery now includes robust error recovery mechanisms that handle common issues automatically:
+
+#### Database Issues
+- **Corruption Recovery**: Automatic database rebuild when corruption is detected
+- **Lock Resolution**: Intelligent retry with backoff for database lock conflicts
+- **Permission Handling**: Clear guidance for permission-related issues
+- **Disk Space Management**: Automatic cleanup of temporary files when disk space is low
+
+#### Indexing Resilience
+- **Corrupted File Handling**: Skip corrupted files and continue indexing
+- **Network Drive Recovery**: Automatic retry for disconnected network drives
+- **Incremental Fallback**: Fall back to incremental indexing when full indexing fails
+- **Directory Validation**: Automatic creation of missing directories
+
+**Example Recovery Scenarios:**
+```
+# Database corruption detected
+🔧 "Database corruption detected and automatically repaired. Your data has been restored."
+
+# Network drive disconnected
+🔧 "Network connection restored. Indexing completed successfully."
+
+# Corrupted file found
+🔧 "Corrupted file detected and skipped. Indexing continued with remaining valid files."
+```
+
+### Multi-Assistant Compatibility
+
+mdquery automatically adapts its responses for different AI assistants:
+
+#### Supported Assistants
+- **Claude (Anthropic)**: Detailed, verbose responses with rich formatting
+- **ChatGPT (OpenAI)**: Structured, concise responses optimized for GPT models
+- **Generic MCP Clients**: Standard JSON responses for universal compatibility
+- **Custom Assistants**: Adaptive formatting based on client capabilities
+
+#### Adaptive Response Formatting
+- **Content Optimization**: Responses tailored to each assistant's strengths
+- **Format Adaptation**: JSON, Markdown, or hybrid formats based on client preferences
+- **Verbosity Control**: Detailed explanations for Claude, concise data for GPT
+- **Error Message Clarity**: Assistant-specific error formatting and guidance
+
+#### Concurrent Access
+- **Multi-User Support**: Multiple assistants can query simultaneously
+- **Request Prioritization**: Intelligent queuing and priority management
+- **Resource Sharing**: Shared cache and optimization benefits across assistants
+- **Isolation**: Each assistant maintains independent session context
+
+**Usage Example:**
+```json
+// Claude Desktop configuration
+{
+  "mcpServers": {
+    "mdquery-claude": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_NOTES_DIR": "/Users/username/Notes",
+        "MDQUERY_ASSISTANT_TYPE": "claude"
+      }
+    }
+  }
+}
+
+// ChatGPT configuration (hypothetical)
+{
+  "mcpServers": {
+    "mdquery-gpt": {
+      "command": "python",
+      "args": ["-m", "mdquery.mcp_server"],
+      "env": {
+        "MDQUERY_NOTES_DIR": "/Users/username/Notes",
+        "MDQUERY_ASSISTANT_TYPE": "gpt"
+      }
+    }
+  }
+}
+```
+
+### Performance Optimizations
+
+#### Query Optimization
+- **Automatic FTS Conversion**: Text searches automatically use Full-Text Search indexes
+- **Query Rewriting**: Complex queries optimized for better performance
+- **Result Limiting**: Intelligent LIMIT clause addition for large result sets
+- **Index Utilization**: Automatic selection of optimal database indexes
+
+#### Caching System
+- **Result Caching**: Frequently accessed results cached for instant retrieval
+- **Analysis Caching**: Complex analysis results cached across sessions
+- **Adaptive TTL**: Cache time-to-live adjusted based on content volatility
+- **Memory Management**: Intelligent cache eviction and memory optimization
+
+#### Lazy Loading
+- **Component Loading**: Analysis components loaded only when needed
+- **Progressive Indexing**: Large directories indexed incrementally
+- **On-Demand Analysis**: Complex analysis performed only when requested
+- **Resource Conservation**: Reduced memory footprint and startup time
+
+**Performance Monitoring:**
+```
+"Show me performance statistics for my mdquery server"
+
+📊 Response includes:
+- Average query execution time: 0.75ms
+- Cache hit rate: 85%
+- Memory usage: 45MB
+- Optimization suggestions: "Consider enabling FTS for content searches"
+```
 
 ### Effective Prompting
 

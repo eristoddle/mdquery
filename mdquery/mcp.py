@@ -26,6 +26,10 @@ from .config import SimplifiedConfig, create_helpful_error_message
 from .exceptions import ConfigurationError, MdqueryError
 from .tag_analysis import TagAnalysisEngine
 from .query_guidance import QueryGuidanceEngine
+from .performance import PerformanceOptimizer, create_performance_optimizer
+from .concurrent import ConcurrentRequestManager, RequestType, RequestPriority, create_concurrent_manager
+from .adaptive_formatting import ResponseFormatter, create_response_formatter, AssistantType
+from .tool_interface import ConsistentToolMixin, ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +39,7 @@ class MCPServerError(Exception):
     pass
 
 
-class MDQueryMCPServer:
+class MDQueryMCPServer(ConsistentToolMixin):
     """
     MCP server for exposing mdquery functionality to AI assistants.
 
@@ -74,12 +78,18 @@ class MDQueryMCPServer:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+        # Initialize parent class (ConsistentToolMixin)
+        super().__init__()
+
         # Initialize components
         self.db_manager: Optional[DatabaseManager] = None
         self.query_engine: Optional[QueryEngine] = None
         self.indexer: Optional[Indexer] = None
         self.cache_manager: Optional[CacheManager] = None
         self.query_guidance_engine: Optional[QueryGuidanceEngine] = None
+        self.performance_optimizer: Optional[PerformanceOptimizer] = None
+        self.concurrent_manager: Optional[ConcurrentRequestManager] = None
+        self.response_formatter: Optional[ResponseFormatter] = None
 
         # Thread pool for blocking operations
         self.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mdquery-mcp")
@@ -114,19 +124,40 @@ class MDQueryMCPServer:
             try:
                 await self._ensure_initialized()
 
-                # Execute query in thread pool
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(
-                    self.executor,
-                    self.query_engine.execute_query,
-                    sql
-                )
-
-                # Format results
-                if format == "json":
-                    return json.dumps(result.to_dict(), indent=2, default=str)
+                # Determine request type based on query
+                query_upper = sql.upper().strip()
+                if any(keyword in query_upper for keyword in ['INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER']):
+                    request_type = RequestType.WRITE
+                    priority = RequestPriority.HIGH
                 else:
-                    return self.query_engine.format_results(result, format)
+                    request_type = RequestType.READ_ONLY
+                    priority = RequestPriority.NORMAL
+
+                # Handle request with concurrent coordination
+                async with self._handle_concurrent_request(
+                    tool_name="query_markdown",
+                    request_type=request_type,
+                    priority=priority,
+                    client_id="mcp_client",  # In real implementation, extract from MCP context
+                    sql=sql,
+                    format=format
+                ) as request_context:
+                    # Execute query in thread pool
+                    loop = asyncio.get_event_loop()
+                    result = await loop.run_in_executor(
+                        self.executor,
+                        self.query_engine.execute_query,
+                        sql
+                    )
+
+                    # Use adaptive formatting instead of fixed format
+                    return self._format_response_adaptively(
+                        content=result.to_dict(),
+                        tool_name="query_markdown",
+                        request_parameters={"sql": sql, "format": format},
+                        client_id=request_context.client_id if request_context else "mcp_client",
+                        format_hint=format
+                    )
 
             except Exception as e:
                 logger.error(f"Query execution failed: {e}")
@@ -1378,6 +1409,381 @@ class MDQueryMCPServer:
                 raise MCPServerError(f"Query optimization analysis failed: {e}")
 
         @self.server.tool()
+        async def get_performance_stats(hours: int = 24) -> str:
+            """
+            Get performance statistics and monitoring data.
+
+            This tool provides comprehensive performance metrics including query execution times,
+            cache hit rates, slow query detection, and optimization success rates for the
+            specified time period.
+
+            Args:
+                hours: Number of hours to look back for statistics (default: 24)
+
+            Returns:
+                Performance statistics as JSON including execution metrics and optimization data
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Get performance stats in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_performance_stats():
+                    return self.performance_optimizer.get_performance_stats(hours=hours)
+
+                stats = await loop.run_in_executor(self.executor, run_performance_stats)
+
+                # Convert to JSON-serializable format
+                result_data = {
+                    'time_period_hours': hours,
+                    'total_queries': stats.total_queries,
+                    'avg_execution_time': stats.avg_execution_time,
+                    'cache_hit_rate': stats.cache_hit_rate,
+                    'slow_query_count': stats.slow_query_count,
+                    'optimization_success_rate': stats.optimization_success_rate,
+                    'memory_usage_mb': stats.memory_usage_mb,
+                    'performance_summary': {
+                        'status': 'excellent' if stats.avg_execution_time < 0.5 else
+                                 'good' if stats.avg_execution_time < 1.0 else
+                                 'needs_attention' if stats.avg_execution_time < 2.0 else 'poor',
+                        'cache_efficiency': 'excellent' if stats.cache_hit_rate > 0.8 else
+                                          'good' if stats.cache_hit_rate > 0.6 else
+                                          'fair' if stats.cache_hit_rate > 0.4 else 'poor',
+                        'optimization_effectiveness': 'excellent' if stats.optimization_success_rate > 0.8 else
+                                                    'good' if stats.optimization_success_rate > 0.6 else
+                                                    'fair' if stats.optimization_success_rate > 0.4 else 'poor'
+                    }
+                }
+
+                return json.dumps(result_data, indent=2, default=str)
+
+            except Exception as e:
+                logger.error(f"Performance statistics retrieval failed: {e}")
+                raise MCPServerError(f"Performance statistics retrieval failed: {e}")
+
+        @self.server.tool()
+        async def optimize_query_performance(query: str, auto_apply: bool = True) -> str:
+            """
+            Optimize a query for better performance and get suggestions.
+
+            This tool analyzes a query for optimization opportunities and can automatically
+            apply optimizations. It provides detailed information about what optimizations
+            were applied or suggested.
+
+            Args:
+                query: SQL query to optimize
+                auto_apply: Whether to automatically apply optimizations (default: True)
+
+            Returns:
+                Optimization results as JSON including the optimized query and applied changes
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Optimize query in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_query_optimization():
+                    optimized_query, applied_optimizations = self.performance_optimizer.optimize_query(
+                        query, auto_apply=auto_apply
+                    )
+                    suggestions = self.performance_optimizer.suggest_optimizations(query)
+                    return optimized_query, applied_optimizations, suggestions
+
+                optimized_query, applied_optimizations, suggestions = await loop.run_in_executor(
+                    self.executor, run_query_optimization
+                )
+
+                # Convert to JSON-serializable format
+                result_data = {
+                    'original_query': query,
+                    'optimized_query': optimized_query,
+                    'auto_apply': auto_apply,
+                    'optimizations_applied': applied_optimizations,
+                    'optimization_count': len(applied_optimizations),
+                    'all_suggestions': []
+                }
+
+                for suggestion in suggestions:
+                    result_data['all_suggestions'].append({
+                        'rule_name': suggestion['rule_name'],
+                        'description': suggestion['description'],
+                        'performance_impact': suggestion['performance_impact'],
+                        'applied': suggestion['rule_name'] in applied_optimizations or
+                                any(opt.startswith(suggestion['rule_name']) for opt in applied_optimizations)
+                    })
+
+                return json.dumps(result_data, indent=2, default=str)
+
+            except Exception as e:
+                logger.error(f"Query optimization failed: {e}")
+                raise MCPServerError(f"Query optimization failed: {e}")
+
+        @self.server.tool()
+        async def execute_optimized_query(query: str, use_cache: bool = True, format: str = "json") -> str:
+            """
+            Execute a query with automatic optimization and caching.
+
+            This tool executes queries using the performance optimizer, which automatically
+            applies optimizations and uses result caching for improved performance.
+
+            Args:
+                query: SQL query to execute
+                use_cache: Whether to use result caching (default: True)
+                format: Output format (json, csv, table, markdown)
+
+            Returns:
+                Query results with performance metadata
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Execute optimized query in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_optimized_query():
+                    return self.performance_optimizer.execute_with_optimization(query, use_cache=use_cache)
+
+                result = await loop.run_in_executor(self.executor, run_optimized_query)
+
+                # Format results based on requested format
+                if format == "json":
+                    result_dict = result.to_dict()
+                    result_dict['performance_metadata'] = {
+                        'cache_used': use_cache,
+                        'execution_time_ms': result.execution_time_ms,
+                        'row_count': result.row_count
+                    }
+                    return json.dumps(result_dict, indent=2, default=str)
+                else:
+                    # For other formats, use the regular query engine formatting
+                    return self.query_engine.format_results(result, format)
+
+            except Exception as e:
+                logger.error(f"Optimized query execution failed: {e}")
+                raise MCPServerError(f"Optimized query execution failed: {e}")
+
+        @self.server.tool()
+        async def clear_performance_cache() -> str:
+            """
+            Clear the performance optimizer's result cache.
+
+            This tool clears all cached query results to free memory or force
+            fresh query execution. Useful for testing or when data has been updated.
+
+            Returns:
+                Cache clearing confirmation
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Clear cache in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_cache_clear():
+                    self.performance_optimizer.clear_cache()
+                    return True
+
+                await loop.run_in_executor(self.executor, run_cache_clear)
+
+                result_data = {
+                    'success': True,
+                    'message': 'Performance cache cleared successfully',
+                    'timestamp': datetime.now().isoformat()
+                }
+
+                return json.dumps(result_data, indent=2, default=str)
+
+            except Exception as e:
+                logger.error(f"Cache clearing failed: {e}")
+                raise MCPServerError(f"Cache clearing failed: {e}")
+
+        @self.server.tool()
+        async def get_concurrent_stats() -> str:
+            """
+            Get concurrent request handling statistics.
+
+            This tool provides comprehensive statistics about concurrent request handling,
+            including active requests, queue status, database lock contention, and
+            performance metrics for multi-assistant access.
+
+            Returns:
+                Concurrent request statistics as JSON
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Get concurrent stats in thread pool
+                loop = asyncio.get_event_loop()
+
+                def run_concurrent_stats():
+                    return self.concurrent_manager.get_stats()
+
+                stats = await loop.run_in_executor(self.executor, run_concurrent_stats)
+
+                # Add server-level information
+                result_data = {
+                    'timestamp': datetime.now().isoformat(),
+                    'server_info': {
+                        'max_workers': self.executor._max_workers,
+                        'thread_pool_type': 'ThreadPoolExecutor'
+                    },
+                    **stats
+                }
+
+                return json.dumps(result_data, indent=2, default=str)
+
+            except Exception as e:
+                logger.error(f"Concurrent statistics retrieval failed: {e}")
+                raise MCPServerError(f"Concurrent statistics retrieval failed: {e}")
+
+        @self.server.tool()
+        async def test_adaptive_formatting(assistant_type: str = "auto", content_type: str = "query_results") -> str:
+            """
+            Test adaptive response formatting for different AI assistants.
+
+            This tool demonstrates how the response formatter adapts output based on
+            different AI assistant capabilities and preferences. Useful for testing
+            multi-assistant compatibility.
+
+            Args:
+                assistant_type: Assistant type to simulate (claude, gpt, llama, gemini, generic, auto)
+                content_type: Type of content to simulate (query_results, analysis_results, performance_stats)
+
+            Returns:
+                Formatted response demonstrating adaptive formatting
+            """
+            try:
+                await self._ensure_initialized()
+
+                # Generate sample content based on type
+                if content_type == "query_results":
+                    sample_content = {
+                        "columns": ["id", "title", "tags", "word_count"],
+                        "rows": [
+                            {"id": 1, "title": "AI Development Guide", "tags": "ai,coding", "word_count": 1500},
+                            {"id": 2, "title": "MCP Implementation", "tags": "mcp,protocol", "word_count": 2200},
+                            {"id": 3, "title": "Performance Optimization", "tags": "performance,optimization", "word_count": 1800}
+                        ],
+                        "row_count": 3,
+                        "execution_time_ms": 45.2
+                    }
+                elif content_type == "analysis_results":
+                    sample_content = {
+                        "topic_groups": [
+                            {"name": "AI Development", "file_count": 15, "key_themes": ["coding", "ai", "llm"]},
+                            {"name": "Documentation", "file_count": 8, "key_themes": ["docs", "guides", "tutorials"]}
+                        ],
+                        "actionable_insights": [
+                            {"title": "Improve documentation", "priority": "high"},
+                            {"title": "Add more examples", "priority": "medium"}
+                        ],
+                        "summary": "Analysis of 23 files reveals strong focus on AI development"
+                    }
+                else:  # performance_stats
+                    sample_content = {
+                        "total_queries": 150,
+                        "avg_execution_time": 0.75,
+                        "cache_hit_rate": 0.85,
+                        "slow_query_count": 3,
+                        "performance_summary": {"status": "good", "cache_efficiency": "excellent"}
+                    }
+
+                # Determine client ID based on assistant type
+                if assistant_type == "auto":
+                    client_id = "auto_detect_client"
+                else:
+                    client_id = f"{assistant_type}_test_client"
+
+                # Use adaptive formatting
+                formatted_response = self._format_response_adaptively(
+                    content=sample_content,
+                    tool_name="test_adaptive_formatting",
+                    request_parameters={"assistant_type": assistant_type, "content_type": content_type},
+                    client_id=client_id,
+                    format_hint="json"
+                )
+
+                # Add formatting metadata
+                result_data = {
+                    "formatted_content": json.loads(formatted_response) if formatted_response.startswith('{') else formatted_response,
+                    "formatting_info": {
+                        "assistant_type": assistant_type,
+                        "content_type": content_type,
+                        "adaptive_formatting_applied": True,
+                        "original_content_size": len(str(sample_content))
+                    }
+                }
+
+                return json.dumps(result_data, indent=2, default=str)
+
+            except Exception as e:
+                logger.error(f"Adaptive formatting test failed: {e}")
+                raise MCPServerError(f"Adaptive formatting test failed: {e}")
+
+    async def _handle_concurrent_request(self,
+                                       tool_name: str,
+                                       request_type: RequestType = RequestType.READ_ONLY,
+                                       priority: RequestPriority = RequestPriority.NORMAL,
+                                       client_id: str = "unknown",
+                                       **parameters):
+        """
+        Helper method to handle requests with concurrent coordination.
+
+        This method wraps tool execution with proper concurrent request handling,
+        ensuring database consistency and optimal performance under load.
+        """
+        if not self.concurrent_manager:
+            # Fallback if concurrent manager not initialized
+            yield None
+            return
+
+        # Create request context
+        request_context = self.concurrent_manager.create_request_context(
+            client_id=client_id,
+            tool_name=tool_name,
+            request_type=request_type,
+            priority=priority,
+            **parameters
+        )
+
+        # Handle request with coordination
+        async with self.concurrent_manager.handle_request(request_context):
+            yield request_context
+
+    def _format_response_adaptively(self,
+                                   content: Any,
+                                   tool_name: str,
+                                   request_parameters: Dict[str, Any],
+                                   client_id: str = "unknown",
+                                   format_hint: Optional[str] = None) -> str:
+        """
+        Format response using adaptive formatting based on client capabilities.
+
+        This method automatically detects the AI assistant type and formats
+        the response optimally for that assistant's capabilities and preferences.
+        """
+        if not self.response_formatter:
+            # Fallback to JSON if formatter not available
+            if isinstance(content, (dict, list)):
+                return json.dumps(content, indent=2, default=str)
+            else:
+                return str(content)
+
+        # Create formatting context
+        formatting_context = self.response_formatter.create_formatting_context(
+            tool_name=tool_name,
+            request_parameters=request_parameters,
+            content=content,
+            client_id=client_id,
+            format_hint=format_hint
+        )
+
+        # Format response adaptively
+        return self.response_formatter.format_response(content, formatting_context)
+
+        @self.server.tool()
         async def get_query_syntax_reference() -> str:
             """
             Get comprehensive query syntax reference documentation.
@@ -1414,6 +1820,30 @@ class MDQueryMCPServer:
             except Exception as e:
                 logger.error(f"Syntax reference retrieval failed: {e}")
                 raise MCPServerError(f"Syntax reference retrieval failed: {e}")
+
+        @self.server.tool()
+        async def get_tool_documentation(tool_name: Optional[str] = None) -> str:
+            """
+            Get comprehensive tool documentation and interface specifications.
+
+            This tool provides standardized documentation for all MCP tools, including
+            parameter specifications, examples, performance notes, and usage guidance.
+            Supports the consistent tool interface system.
+
+            Args:
+                tool_name: Specific tool to get documentation for (optional)
+                          If not provided, returns overview of all tools
+
+            Returns:
+                Tool documentation as JSON including parameters, examples, and specifications
+            """
+            try:
+                # Use the ConsistentToolMixin method
+                return self.get_tool_documentation(tool_name)
+
+            except Exception as e:
+                logger.error(f"Tool documentation retrieval failed: {e}")
+                raise MCPServerError(f"Tool documentation retrieval failed: {e}")
 
     async def _ensure_initialized(self) -> None:
         """
@@ -1513,6 +1943,27 @@ class MDQueryMCPServer:
                 cache_manager=self.cache_manager
             )
 
+            # Initialize performance optimizer
+            logger.debug("Initializing performance optimizer")
+            self.performance_optimizer = create_performance_optimizer(
+                query_engine=self.query_engine,
+                cache_size=1000,
+                cache_ttl_minutes=30,
+                slow_query_threshold_seconds=2.0
+            )
+
+            # Initialize concurrent request manager
+            logger.debug("Initializing concurrent request manager")
+            self.concurrent_manager = create_concurrent_manager(
+                max_concurrent_requests=20,
+                max_queue_size=100,
+                default_timeout=30.0
+            )
+
+            # Initialize response formatter
+            logger.debug("Initializing adaptive response formatter")
+            self.response_formatter = create_response_formatter()
+
             logger.info("Core components initialized successfully")
 
         except Exception as e:
@@ -1577,6 +2028,13 @@ class MDQueryMCPServer:
     def _cleanup_partial_initialization(self) -> None:
         """Clean up partially initialized components."""
         try:
+            if self.response_formatter:
+                self.response_formatter = None
+            if self.concurrent_manager:
+                self.concurrent_manager.shutdown()
+                self.concurrent_manager = None
+            if self.performance_optimizer:
+                self.performance_optimizer = None
             if self.indexer:
                 self.indexer = None
             if self.query_engine:
