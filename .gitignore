@@ -213,3 +213,4 @@ docs/build/
 TASK_*_IMPLEMENTATION_SUMMARY.md
 
 .mailmap
+test_notes/

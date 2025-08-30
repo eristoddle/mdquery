@@ -13,10 +13,13 @@ click>=8.0.0
 markdown>=3.4.0
 
 # Additional markdown extensions for better parsing
-markdown-extensions>=0.1.0
+# Using built-in markdown extensions instead
 
 # Type checking support (development)
 typing-extensions>=4.0.0
+
+# System utilities
+psutil>=5.8.0
 
 # MCP server dependencies
 mcp>=1.0.0

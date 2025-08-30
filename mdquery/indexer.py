@@ -8,7 +8,7 @@ import os
 import psutil
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Any
 
 from .database import DatabaseManager
 from .models import FileMetadata, ParsedContent
@@ -885,8 +885,9 @@ class Indexer:
         except Exception as e:
             logger.error(f"Error during directory sync: {e}")
             sync_stats['errors'] += 1
-            return sync_stats    def
-_clear_obsidian_data(self, conn, file_id: int) -> None:
+            return sync_stats
+
+    def _clear_obsidian_data(self, conn, file_id: int) -> None:
         """Clear all Obsidian-specific data for a file."""
         obsidian_tables = [
             'obsidian_links',

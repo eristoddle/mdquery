@@ -1420,8 +1420,9 @@ def research_summary(directory: str, date_from: Optional[datetime], date_to: Opt
 
 if __name__ == '__main__':
     cli()
-@cli.c
-ommand()
+
+
+@cli.command()
 @click.argument('directory', type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path))
 @click.option('--recursive/--no-recursive', default=True,
               help='Recursively scan subdirectories')
