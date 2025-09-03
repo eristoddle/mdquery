@@ -308,9 +308,22 @@ class SimplifiedConfig:
                 if not dir_path.exists():
                     dir_path.mkdir(parents=True, exist_ok=True)
                     logger.info(f"Created {description}: {dir_path}")
+                else:
+                    logger.info(f"{description} already exists: {dir_path}")
 
                 # Verify directory is writable
-                if not self._check_directory_access(dir_path, check_write=True):
+                logger.debug(f"Checking write access for {description}: {dir_path}")
+                write_access = self._check_directory_access(dir_path, check_write=True)
+                logger.debug(f"Write access for {description}: {write_access}")
+
+                if not write_access:
+                    # Try to get more detailed information about the directory
+                    try:
+                        stat_info = dir_path.stat()
+                        logger.debug(f"Directory stats for {dir_path}: mode={oct(stat_info.st_mode)}, uid={stat_info.st_uid}, gid={stat_info.st_gid}")
+                    except Exception as stat_e:
+                        logger.debug(f"Could not get directory stats for {dir_path}: {stat_e}")
+
                     raise FileAccessError(
                         f"Cannot write to {description}: {dir_path}",
                         file_path=dir_path,
@@ -361,21 +374,47 @@ class SimplifiedConfig:
 
         # Validate that database parent directory exists and is writable
         db_parent = self._config.db_path.parent
-        if not db_parent.exists() or not self._check_directory_access(db_parent, check_write=True):
+        logger.debug(f"Validating database directory: {db_parent}")
+        db_parent_exists = db_parent.exists()
+        db_parent_writable = self._check_directory_access(db_parent, check_write=True) if db_parent_exists else False
+        logger.debug(f"Database directory exists: {db_parent_exists}, writable: {db_parent_writable}")
+
+        if not db_parent_exists or not db_parent_writable:
             raise ConfigurationError(
                 f"Database directory is not accessible: {db_parent}",
                 context={
                     "suggestion": "Ensure the database directory exists and is writable",
-                    "db_path": str(self._config.db_path)
+                    "db_path": str(self._config.db_path),
+                    "directory_exists": db_parent_exists,
+                    "directory_writable": db_parent_writable
                 }
             )
 
         # Validate that cache directory exists and is writable
-        if not self._config.cache_dir.exists() or not self._check_directory_access(self._config.cache_dir, check_write=True):
+        logger.debug(f"Validating cache directory: {self._config.cache_dir}")
+        cache_exists = self._config.cache_dir.exists()
+        cache_writable = self._check_directory_access(self._config.cache_dir, check_write=True) if cache_exists else False
+        logger.debug(f"Cache directory exists: {cache_exists}, writable: {cache_writable}")
+
+        if not cache_exists or not cache_writable:
+            # Try to get more detailed information about the cache directory
+            cache_info = {}
+            if cache_exists:
+                try:
+                    stat_info = self._config.cache_dir.stat()
+                    cache_info["mode"] = oct(stat_info.st_mode)
+                    cache_info["uid"] = stat_info.st_uid
+                    cache_info["gid"] = stat_info.st_gid
+                except Exception as stat_e:
+                    cache_info["stat_error"] = str(stat_e)
+
             raise ConfigurationError(
                 f"Cache directory is not accessible: {self._config.cache_dir}",
                 context={
-                    "suggestion": "Ensure the cache directory exists and is writable"
+                    "suggestion": "Ensure the cache directory exists and is writable",
+                    "directory_exists": cache_exists,
+                    "directory_writable": cache_writable,
+                    "cache_info": cache_info
                 }
             )
 
@@ -400,14 +439,18 @@ class SimplifiedConfig:
                 # Try to create a temporary file
                 test_file = path / ".mdquery_access_test"
                 try:
-                    test_file.touch()
+                    # Use open() with 'w' mode to ensure we can actually write to the file
+                    with open(test_file, 'w') as f:
+                        f.write('test')
                     test_file.unlink()
-                except (OSError, PermissionError):
+                except (OSError, PermissionError) as e:
+                    logger.debug(f"Write permission check failed for {path}: {e}")
                     return False
 
             return True
 
-        except (OSError, PermissionError):
+        except (OSError, PermissionError) as e:
+            logger.debug(f"Permission check failed for {path}: {e}")
             return False
 
     @property
@@ -577,33 +620,61 @@ def create_helpful_error_message(error: Exception, notes_dir: Optional[str] = No
         )
 
     elif isinstance(error, FileAccessError):
-        return (
-            f"❌ Cannot access directory: {error.file_path}\n\n"
+        message = (
+            f"❌ File access error: {error}\n\n"
             f"💡 Solutions:\n"
-            f"   • Check directory permissions (should be readable and writable)\n"
-            f"   • Ensure you own the directory or have appropriate access\n"
-            f"   • Try running with appropriate permissions\n\n"
-            f"🔧 Quick fixes:\n"
-            f"   • chmod 755 {error.file_path}  (on Unix systems)\n"
-            f"   • Check if the directory is on a read-only filesystem"
         )
+
+        # Add context-specific solutions
+        if error.context:
+            if "directory_exists" in error.context and not error.context["directory_exists"]:
+                message += f"   • The required directory does not exist\n"
+            elif "directory_writable" in error.context and not error.context["directory_writable"]:
+                message += f"   • The directory exists but is not writable\n"
+                message += f"   • Check directory permissions\n"
+
+            if "required_permissions" in error.context:
+                message += f"   • Required permissions: {error.context['required_permissions']}\n"
+
+            if "suggestion" in error.context:
+                message += f"   • {error.context['suggestion']}\n"
+
+        message += (
+            f"   • Ensure you have read and write permissions to your notes directory\n"
+            f"   • Try running with elevated permissions if necessary\n"
+            f"   • Check that the disk is not full\n"
+            f"   • Verify that the file system is not read-only\n"
+        )
+
+        return message
 
     elif isinstance(error, ConfigurationError):
-        context = getattr(error, 'context', {})
-        suggestion = context.get('suggestion', 'Check your configuration settings')
+        message = f"❌ Configuration error: {error}\n\n"
 
-        return (
-            f"❌ Configuration error: {error.message}\n\n"
-            f"💡 Suggestion: {suggestion}\n\n"
-            f"📖 For more help, see the configuration documentation"
-        )
+        if error.context:
+            message += f"📋 Details:\n"
+            for key, value in error.context.items():
+                message += f"   • {key}: {value}\n"
+            message += f"\n"
+
+        message += f"💡 Solutions:\n"
+
+        if error.context and "suggestion" in error.context:
+            message += f"   • {error.context['suggestion']}\n"
+        else:
+            message += f"   • Check your configuration parameters\n"
+            message += f"   • Ensure all paths are valid and accessible\n"
+            message += f"   • Verify directory permissions\n"
+
+        return message
 
     else:
         return (
             f"❌ Unexpected error: {error}\n\n"
-            f"💡 This might be a bug. Please check:\n"
-            f"   • Your notes directory path is correct\n"
-            f"   • You have proper permissions\n"
-            f"   • The directory contains markdown files\n\n"
-            f"🐛 If the problem persists, please report this issue"
+            f"💡 Solutions:\n"
+            f"   • Check your configuration\n"
+            f"   • Ensure all paths are valid and accessible\n"
+            f"   • Verify directory permissions\n"
+            f"   • Check that the disk is not full\n"
+            f"   • Report this issue if it persists\n"
         )

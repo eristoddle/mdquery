@@ -2246,8 +2246,20 @@ def main():
             logger.info(f"Starting MCP server with configuration: {config}")
             server = MDQueryMCPServer(config=config)
 
-        # Run the server
-        asyncio.run(server.run())
+        # Run the server - handle both cases where event loop exists or not
+        try:
+            # Check if there's already an event loop running
+            loop = asyncio.get_running_loop()
+            # If we get here, there's already a loop running
+            logger.warning("Event loop already running. The FastMCP server creates its own event loop, "
+                          "so we cannot run it from within an existing async context. "
+                          "Please run the server in a synchronous context.")
+            sys.exit(1)
+        except RuntimeError:
+            # No event loop running, safe to use server.server.run() which creates its own event loop
+            logger.info("No event loop running, starting server")
+            # Call the FastMCP server's run method directly, not our async wrapper
+            server.server.run()
 
     except (ConfigurationError, MdqueryError) as e:
         # Handle configuration errors with helpful messages
