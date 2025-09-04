@@ -444,21 +444,22 @@ class QueryEngine:
     @contextmanager
     def _query_timeout_context(self):
         """Context manager for query timeout protection."""
+        import threading
         def timeout_handler(signum, frame):
             raise QueryTimeoutError(f"Query execution timed out after {self._query_timeout} seconds")
 
-        # Set up timeout signal (Unix only)
+        # Only use signal if in main thread
         old_handler = None
+        is_main_thread = threading.current_thread() == threading.main_thread()
         try:
-            if hasattr(signal, 'SIGALRM'):
+            if is_main_thread and hasattr(signal, 'SIGALRM'):
                 old_handler = signal.signal(signal.SIGALRM, timeout_handler)
                 signal.alarm(int(self._query_timeout))
 
             yield
 
         finally:
-            # Clean up timeout signal
-            if hasattr(signal, 'SIGALRM'):
+            if is_main_thread and hasattr(signal, 'SIGALRM'):
                 signal.alarm(0)
                 if old_handler is not None:
                     signal.signal(signal.SIGALRM, old_handler)
