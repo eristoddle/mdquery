@@ -582,15 +582,25 @@ class Indexer:
             for key, value_data in parsed_content.frontmatter.items():
                 if isinstance(value_data, dict) and 'value' in value_data:
                     value = str(value_data['value']) if value_data['value'] is not None else None
-                    value_type = value_data.get('type', 'string')
+                    parser_type = value_data.get('type', 'string')
+                    # Map parser types to database constraint types
+                    value_type = self._map_frontmatter_type(parser_type)
                 else:
                     value = str(value_data) if value_data is not None else None
                     value_type = 'string'
 
-                conn.execute("""
-                    INSERT INTO frontmatter (file_id, key, value, value_type)
-                    VALUES (?, ?, ?, ?)
-                """, (file_id, key, value, value_type))
+                # Only insert if value_type is valid according to database constraint
+                if value_type in ('string', 'number', 'boolean', 'array', 'date'):
+                    conn.execute("""
+                        INSERT INTO frontmatter (file_id, key, value, value_type)
+                        VALUES (?, ?, ?, ?)
+                    """, (file_id, key, value, value_type))
+                else:
+                    # Fallback to string for invalid types
+                    conn.execute("""
+                        INSERT INTO frontmatter (file_id, key, value, value_type)
+                        VALUES (?, ?, ?, ?)
+                    """, (file_id, key, value, 'string'))
 
             # Insert tags
             # Re-parse to get source information, but also include any tags from parsed_content
@@ -654,6 +664,30 @@ class Indexer:
             ))
 
             conn.commit()
+
+    def _map_frontmatter_type(self, parser_type: str) -> str:
+        """
+        Map frontmatter parser types to database constraint types.
+
+        Args:
+            parser_type: Type from frontmatter parser
+
+        Returns:
+            Valid database constraint type
+        """
+        type_mapping = {
+            'string': 'string',
+            'number': 'number',
+            'boolean': 'boolean',
+            'array': 'array',
+            'date': 'date',
+            'null': 'string',  # Store nulls as strings
+            'object': 'string',  # Store objects as JSON strings
+            'boolean_string': 'boolean',  # Convert boolean strings to booleans
+            'number_string': 'number',  # Convert number strings to numbers
+        }
+
+        return type_mapping.get(parser_type, 'string')
 
     def _clear_directory_data(self, directory: Path) -> None:
         """

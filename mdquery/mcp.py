@@ -1925,12 +1925,25 @@ class MDQueryMCPServer(ConsistentToolMixin):
             logger.debug(f"Initializing database at: {self.db_path}")
             self.db_manager = create_database(self.db_path)
 
-            # Initialize cache manager
-            logger.debug(f"Initializing cache manager with cache dir: {self.cache_dir}")
+            # Initialize cache manager with proper database file path
+            # Ensure cache_dir is a Path object and create cache database path
+            cache_dir_path = Path(self.cache_dir) if not isinstance(self.cache_dir, Path) else self.cache_dir
+            cache_db_path = cache_dir_path / "cache.db"
+
+            # Ensure the cache directory exists
+            cache_dir_path.mkdir(parents=True, exist_ok=True)
+
+            logger.debug(f"Initializing cache manager with cache db path: {cache_db_path}")
             self.cache_manager = CacheManager(
-                cache_path=self.cache_dir,  # Use cache directory, not database path
+                cache_path=cache_db_path,  # Use proper database file path
                 database_manager=self.db_manager
             )
+
+            # Initialize the cache database
+            try:
+                self.cache_manager.initialize_cache()
+            except Exception as cache_init_error:
+                logger.warning(f"Cache initialization warning: {cache_init_error}")
 
             # Initialize query engine
             logger.debug("Initializing query engine")
@@ -1968,6 +1981,10 @@ class MDQueryMCPServer(ConsistentToolMixin):
 
         except Exception as e:
             logger.error(f"Failed to initialize core components: {e}")
+            # Clean up partially initialized components
+            self._cleanup_partial_initialization()
+            raise
+
             # Clean up partially initialized components
             self._cleanup_partial_initialization()
             raise
