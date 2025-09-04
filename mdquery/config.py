@@ -288,13 +288,14 @@ class SimplifiedConfig:
 
     def _create_directory_structure(self) -> None:
         """
-        Create necessary directory structure.
+        Create necessary directory structure with retry logic for race conditions.
 
         This method implements requirement 1.4 for automatic directory creation.
 
         Raises:
             FileAccessError: If directories cannot be created
         """
+        import time
         if not self._config:
             raise ConfigurationError("Configuration not initialized")
 
@@ -303,45 +304,65 @@ class SimplifiedConfig:
             (self._config.cache_dir, "cache directory")
         ]
 
+        max_retries = 5
+        retry_delay = 0.2  # seconds
+
         for dir_path, description in directories_to_create:
-            try:
-                if not dir_path.exists():
-                    dir_path.mkdir(parents=True, exist_ok=True)
-                    logger.info(f"Created {description}: {dir_path}")
-                else:
-                    logger.info(f"{description} already exists: {dir_path}")
+            for attempt in range(max_retries):
+                try:
+                    if not dir_path.exists():
+                        try:
+                            dir_path.mkdir(parents=True, exist_ok=True)
+                            logger.info(f"Created {description}: {dir_path}")
+                        except FileExistsError:
+                            # Directory was created by another process in the meantime
+                            logger.info(f"{description} already exists (race): {dir_path}")
+                    else:
+                        logger.info(f"{description} already exists: {dir_path}")
 
-                # Verify directory is writable
-                logger.debug(f"Checking write access for {description}: {dir_path}")
-                write_access = self._check_directory_access(dir_path, check_write=True)
-                logger.debug(f"Write access for {description}: {write_access}")
+                    # Verify directory is writable
+                    logger.debug(f"Checking write access for {description}: {dir_path}")
+                    write_access = self._check_directory_access(dir_path, check_write=True)
+                    logger.debug(f"Write access for {description}: {write_access}")
 
-                if not write_access:
-                    # Try to get more detailed information about the directory
-                    try:
-                        stat_info = dir_path.stat()
-                        logger.debug(f"Directory stats for {dir_path}: mode={oct(stat_info.st_mode)}, uid={stat_info.st_uid}, gid={stat_info.st_gid}")
-                    except Exception as stat_e:
-                        logger.debug(f"Could not get directory stats for {dir_path}: {stat_e}")
+                    if write_access:
+                        break  # Success
+                    else:
+                        # Try to get more detailed information about the directory
+                        try:
+                            stat_info = dir_path.stat()
+                            logger.debug(f"Directory stats for {dir_path}: mode={oct(stat_info.st_mode)}, uid={stat_info.st_uid}, gid={stat_info.st_gid}")
+                        except Exception as stat_e:
+                            logger.debug(f"Could not get directory stats for {dir_path}: {stat_e}")
 
-                    raise FileAccessError(
-                        f"Cannot write to {description}: {dir_path}",
-                        file_path=dir_path,
-                        context={
-                            "suggestion": "Please check directory permissions and ensure you have write access",
-                            "required_permissions": "read, write"
-                        }
-                    )
-
-            except (OSError, PermissionError) as e:
-                raise FileAccessError(
-                    f"Cannot create {description} at {dir_path}: {e}",
-                    file_path=dir_path,
-                    context={
-                        "original_error": str(e),
-                        "suggestion": "Please check parent directory permissions or specify a different location"
-                    }
-                )
+                        if attempt < max_retries - 1:
+                            logger.warning(f"Write access failed for {description} at {dir_path}, retrying ({attempt+1}/{max_retries})...")
+                            time.sleep(retry_delay)
+                            continue
+                        else:
+                            raise FileAccessError(
+                                f"Cannot write to {description}: {dir_path}",
+                                file_path=dir_path,
+                                context={
+                                    "suggestion": "Please check directory permissions and ensure you have write access",
+                                    "required_permissions": "read, write"
+                                }
+                            )
+                except (OSError, PermissionError) as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Error creating {description} at {dir_path}: {e}, retrying ({attempt+1}/{max_retries})...")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        raise FileAccessError(
+                            f"Cannot create {description} at {dir_path}: {e}",
+                            file_path=dir_path,
+                            context={
+                                "original_error": str(e),
+                                "suggestion": "Please check parent directory permissions or specify a different location"
+                            }
+                        )
+                break
 
     def _validate_final_config(self) -> None:
         """
