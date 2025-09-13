@@ -1,0 +1,11 @@
+{
+  "id": "mdquery-demo",
+  "name": "MDQuery Demo Plugin",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "Demonstration plugin showing MDQuery library usage in Obsidian",
+  "author": "MDQuery Team",
+  "authorUrl": "https://github.com/mdquery/mdquery-ts",
+  "fundingUrl": "https://github.com/sponsors/mdquery",
+  "isDesktopOnly": false
+}
