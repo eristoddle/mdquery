@@ -14,7 +14,7 @@ install_requires = [req for req in requirements if not any(
 
 setup(
     name="mdquery",
-    version="0.2.0",
+    version="0.3.0",
     description="Universal markdown querying tool with SQL-like syntax",
     long_description="A SQL-like interface for searching and analyzing markdown files across different note-taking systems and static site generators.",
     author="mdquery",
