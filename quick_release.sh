@@ -5,6 +5,12 @@
 
 set -e
 
+# Initialize pyenv if available
+if command -v pyenv >/dev/null 2>&1; then
+    eval "$(pyenv init -)"
+    echo "🐍 Initialized pyenv (Python $(python --version 2>&1 | cut -d' ' -f2))"
+fi
+
 VERSION=""
 TEST_FLAG=""
 DRY_RUN=""
@@ -65,7 +71,14 @@ if [ -n "$DRY_RUN" ]; then
     ARGS="$ARGS $DRY_RUN"
 fi
 
-python3 release.py $ARGS
+# Determine python command
+if command -v pyenv >/dev/null 2>&1; then
+    PYTHON_CMD="python"
+else
+    PYTHON_CMD="python3"
+fi
+
+$PYTHON_CMD release.py $ARGS
 
 if [ -z "$DRY_RUN" ]; then
     echo "✅ Release complete!"

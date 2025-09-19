@@ -22,9 +22,57 @@ import argparse
 from pathlib import Path
 
 
-def run_command(cmd, check=True, capture_output=True):
+def get_python_command():
+    """Get the appropriate Python command, handling pyenv if available."""
+    # Check if pyenv is available and initialize it
+    try:
+        # Check if pyenv is installed
+        subprocess.run("which pyenv", shell=True, check=True, capture_output=True)
+        
+        # Initialize pyenv and get python command
+        result = subprocess.run(
+            'eval "$(pyenv init -)" && which python',
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return "python"  # pyenv provides this
+        
+        # Fallback to python3 with pyenv
+        result = subprocess.run(
+            'eval "$(pyenv init -)" && which python3',
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return "python3"  # pyenv provides this
+            
+    except subprocess.CalledProcessError:
+        pass  # pyenv not available
+    
+    # Standard fallback for systems without pyenv
+    if subprocess.run("which python3", shell=True, capture_output=True).returncode == 0:
+        return "python3"
+    elif subprocess.run("which python", shell=True, capture_output=True).returncode == 0:
+        return "python"
+    else:
+        return "python3"  # Best guess
+
+
+def run_command(cmd, check=True, capture_output=True, use_pyenv=True):
     """Run a shell command and return the result."""
     print(f"Running: {cmd}")
+    
+    # If using pyenv and the command involves python, initialize pyenv first
+    if use_pyenv and ("python" in cmd or "twine" in cmd):
+        try:
+            subprocess.run("which pyenv", shell=True, check=True, capture_output=True)
+            cmd = f'eval "$(pyenv init -)" && {cmd}'
+        except subprocess.CalledProcessError:
+            pass  # pyenv not available, continue without it
+    
     try:
         result = subprocess.run(
             cmd, 
@@ -113,18 +161,21 @@ def check_git_status(dry_run=False):
 
 def check_dependencies(dry_run=False):
     """Check if required tools are available."""
+    python_cmd = get_python_command()
+    
     # Check for git
     try:
-        run_command("which git")
+        run_command("which git", use_pyenv=False)
     except subprocess.CalledProcessError:
         print("git is required but not found. Please install git.")
         sys.exit(1)
     
-    # Check for python3
+    # Check for python
     try:
-        run_command("which python3")
+        run_command(f"{python_cmd} --version")
+        print(f"Using Python command: {python_cmd}")
     except subprocess.CalledProcessError:
-        print("python3 is required but not found. Please install Python 3.")
+        print(f"{python_cmd} is required but not found. Please install Python.")
         sys.exit(1)
     
     # Only check twine if not doing a dry run
@@ -137,7 +188,7 @@ def check_dependencies(dry_run=False):
         
         # Check if twine is available in Python
         try:
-            run_command("python3 -c 'import twine'")
+            run_command(f"{python_cmd} -c 'import twine'")
         except subprocess.CalledProcessError:
             print("twine is not installed. Install it with: pip install twine")
             sys.exit(1)
@@ -154,8 +205,9 @@ def clean_build_artifacts():
 
 def build_package():
     """Build the package for distribution."""
+    python_cmd = get_python_command()
     print("Building package...")
-    run_command("python3 setup.py sdist bdist_wheel")
+    run_command(f"{python_cmd} setup.py sdist bdist_wheel")
 
 
 def upload_to_pypi(test_pypi=False):
