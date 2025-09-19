@@ -1,0 +1,15 @@
+include README.md
+include requirements.txt
+include LICENSE*
+recursive-include mdquery *.py
+recursive-exclude tests *
+recursive-exclude docs *
+recursive-exclude examples *
+exclude *.pyc
+exclude __pycache__
+exclude .gitignore
+exclude .python-version
+exclude release.py
+exclude quick_release.sh
+exclude quick_release.fish
+exclude RELEASE.md
