@@ -13,7 +13,12 @@
    - Create account on https://test.pypi.org/ (for testing)
    - Generate API tokens for authentication
 
-3. **Authentication Setup:**
+3. **Shell Compatibility:**
+   - **Bash/Zsh**: Use `./quick_release.sh`
+   - **Fish shell**: Use `./quick_release.fish`
+   - Both scripts auto-detect and initialize pyenv if available
+
+4. **Authentication Setup:**
    Create ~/.pypirc file with your credentials:
    ```ini
    [distutils]
@@ -37,23 +42,27 @@
 
 1. **Preview Release (Dry Run):**
    ```bash
-   # Preview what would happen for Test PyPI
+   # Bash/Zsh users:
    ./quick_release.sh 0.2.0 --test --dry-run
-   
-   # Preview what would happen for production PyPI
    ./quick_release.sh 0.2.0 --dry-run
+   
+   # Fish shell users:
+   ./quick_release.fish 0.2.0 --test --dry-run
+   ./quick_release.fish 0.2.0 --dry-run
    ```
 
 2. **Test Release:**
    ```bash
    # Test on Test PyPI first
-   ./quick_release.sh 0.2.0 --test
+   ./quick_release.sh 0.2.0 --test      # Bash/Zsh
+   ./quick_release.fish 0.2.0 --test    # Fish shell
    ```
 
 3. **Production Release:**
    ```bash
    # Release to PyPI
-   ./quick_release.sh 0.2.0
+   ./quick_release.sh 0.2.0       # Bash/Zsh
+   ./quick_release.fish 0.2.0     # Fish shell
    ```
 
 ### Manual Release
@@ -73,7 +82,21 @@
    python release.py 0.2.0 --test-pypi
    ```
 
-## Version Files
+## Fish Shell Configuration
+
+If you're using Fish shell and have pyenv issues, ensure your `~/.config/fish/config.fish` contains:
+
+```fish
+# pyenv
+if command -v pyenv >/dev/null
+    pyenv init - | source
+end
+```
+
+After updating the config, restart your fish shell or run:
+```fish
+source ~/.config/fish/config.fish
+```
 
 The following files contain version information and are automatically updated:
 - `mdquery/__init__.py` - Package version
